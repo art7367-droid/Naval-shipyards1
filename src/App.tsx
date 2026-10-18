@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
+import { historicalLaydowns } from './historicalData';
 
 // ============ ТИПЫ ============
 type ShipType = 'battleship' | 'aircraft_carrier' | 'cruiser' | 'destroyer' | 'submarine' | 'auxiliary';
 type YardType = 'naval' | 'civilian';
 type TreatyStatus = 'london' | 'withdrawn' | 'unrestricted';
-type GamePhase = 'menu' | 'playing' | 'event' | 'gameover';
+type GamePhase = 'menu' | 'playing' | 'event' | 'gameover' | 'historical';
 
 interface Ship {
   id: string;
@@ -197,8 +198,10 @@ const shipTemplates: Ship[] = [
   { id: 'ro33', name: 'Ro-33', nameJp: '海中VI', type: 'submarine', cost: 8, buildTime: 16, firepower: 12, speed: 19, armor: 8, description: 'Средняя ПЛ. 2 ед. 4 ТА.', yearAvailable: 1931, program: 'マル①', icon: '🔻', displacement: 1060, length: 80, historicalYard: 'kawasaki' },
 
   // Мару-2 (1934)
-  { id: 'tone', name: 'Тоне', nameJp: '利根', type: 'cruiser', cost: 35, buildTime: 32, firepower: 42, speed: 35, armor: 32, description: 'Тяжёлый крейсер-разведчик. 8×203-мм в носу. 2 ед.', yearAvailable: 1934, program: 'マル②', icon: '🚢', displacement: 11213, length: 201, historicalYard: 'nagasaki' },
-  { id: 'soryu', name: 'Сорю', nameJp: '蒼龍', type: 'aircraft_carrier', cost: 60, buildTime: 36, firepower: 55, speed: 34, armor: 28, description: 'Авианосец. 63 самолёта. 2 ед.', yearAvailable: 1934, program: 'マル②', icon: '🛩️', displacement: 15900, length: 228, historicalYard: 'kure' },
+  { id: 'tone', name: 'Тоне', nameJp: '利根', type: 'cruiser', cost: 35, buildTime: 32, firepower: 42, speed: 35, armor: 32, description: 'Тяжёлый крейсер-разведчик. 8×203-мм в носу.', yearAvailable: 1934, program: 'マル②', icon: '🚢', displacement: 11213, length: 201, historicalYard: 'nagasaki' },
+  { id: 'chikuma', name: 'Тикума', nameJp: '筑摩', type: 'cruiser', cost: 35, buildTime: 34, firepower: 42, speed: 35, armor: 32, description: 'Второй крейсер типа «Тоне». 8×203-мм в носу.', yearAvailable: 1935, program: 'マル②', icon: '🚢', displacement: 11213, length: 201, historicalYard: 'nagasaki' },
+  { id: 'soryu', name: 'Сорю', nameJp: '蒼龍', type: 'aircraft_carrier', cost: 60, buildTime: 36, firepower: 55, speed: 34, armor: 28, description: 'Авианосец. 63 самолёта.', yearAvailable: 1934, program: 'マル②', icon: '🛩️', displacement: 15900, length: 228, historicalYard: 'kure' },
+  { id: 'hiryu', name: 'Хирю', nameJp: '飛龍', type: 'aircraft_carrier', cost: 65, buildTime: 38, firepower: 58, speed: 34, armor: 30, description: 'Авианосец. 73 самолёта. Модификация «Сорю».', yearAvailable: 1936, program: 'マル②', icon: '🛩️', displacement: 17300, length: 227, historicalYard: 'yokosuka' },
   { id: 'asashio', name: 'Асасио', nameJp: '朝潮', type: 'destroyer', cost: 12, buildTime: 18, firepower: 20, speed: 35, armor: 8, description: 'Эсминец. 6×127-мм, 8 ТА. 10 ед.', yearAvailable: 1934, program: 'マル②', icon: '🔹', displacement: 2370, length: 118, historicalYard: 'sasebo' },
   { id: 'otori', name: 'Отори', nameJp: '鴻', type: 'auxiliary', cost: 6, buildTime: 14, firepower: 12, speed: 31, armor: 5, description: 'Торпедный катер. 16 ед.', yearAvailable: 1934, program: 'マル②', icon: '⚡', displacement: 860, length: 83, historicalYard: 'uraga' },
   { id: 'junsen_iii', name: 'Junsen III (I-7)', nameJp: '巡潜III', type: 'submarine', cost: 16, buildTime: 24, firepower: 24, speed: 23, armor: 13, description: 'Крейсерская ПЛ. 2 ед. 6 ТА.', yearAvailable: 1934, program: 'マル②', icon: '🔻', displacement: 2400, length: 109, historicalYard: 'kawasaki' },
@@ -469,6 +472,94 @@ function App() {
     return () => clearInterval(timer);
   }, [state.gamePhase, state.isPaused]);
 
+  // Historical mode tick
+  useEffect(() => {
+    if (state.gamePhase !== 'historical' || state.isPaused) return;
+    const timer = setInterval(() => {
+      setState((prev) => {
+        let newYear = prev.year;
+        let newMonth = prev.month + 1;
+        if (newMonth > 12) { newMonth = 1; newYear++; }
+
+        // Unlock yards by year
+        const updatedYards = prev.shipyards.map(y => ({
+          ...y,
+          available: y.available || (y.availableFrom <= newYear),
+        }));
+
+        // Check completed ships
+        const completed: BuiltShip[] = [];
+        const stillBuilding = prev.buildingShips.filter((b) => {
+          const completedTime = b.completionYear * 12 + b.completionMonth;
+          const currentTime = newYear * 12 + newMonth;
+          if (currentTime >= completedTime) {
+            completed.push({ ...b.ship, completionYear: b.completionYear, completionMonth: b.completionMonth, builtAt: b.builtAt, builtOnSlipway: b.builtOnSlipway });
+            return false;
+          }
+          return true;
+        });
+
+        const newLog = [...prev.log];
+        completed.forEach((s) => {
+          const yardName = updatedYards.find(y => y.id === s.builtAt)?.name || '?';
+          newLog.push(`${newYear}/${String(newMonth).padStart(2, '0')}: ✅ Введён в строй — ${s.name} (${yardName})`);
+        });
+
+        // Historical laydowns — auto-build ships at their historical dates
+        const newBuilding = [...stillBuilding];
+        const occupiedSlipways = new Set(newBuilding.map(b => b.builtOnSlipway));
+        
+        historicalLaydowns.forEach(laydown => {
+          if (laydown.laidDownYear === newYear && laydown.laidDownMonth === newMonth) {
+            const ship = shipTemplates.find(s => s.id === laydown.shipId);
+            if (!ship) return;
+            
+            const yard = updatedYards.find(y => y.id === laydown.yardId);
+            if (!yard || !yard.available) return;
+            
+            const slipway = yard.slipways[laydown.slipwayIdx];
+            if (!slipway || occupiedSlipways.has(slipway.id)) return;
+            
+            // Check if already building or built
+            if (newBuilding.some(b => b.ship.id === ship.id)) return;
+            if (prev.builtShips.some(b => b.id === ship.id)) return;
+            
+            const totalMonths = newMonth + ship.buildTime;
+            const completionYear = newYear + Math.floor((totalMonths - 1) / 12);
+            const completionMonth = ((totalMonths - 1) % 12) + 1;
+            
+            newBuilding.push({
+              ship,
+              completionYear,
+              completionMonth,
+              builtAt: yard.id,
+              builtOnSlipway: slipway.id,
+            });
+            occupiedSlipways.add(slipway.id);
+            
+            newLog.push(`${newYear}/${String(newMonth).padStart(2, '0')}: 🔨 [ИСТОРИЯ] Заложен — ${ship.name} на верфи «${yard.name}» (${slipway.length}м стапель) ${laydown.note || ''}`);
+          }
+        });
+
+        if (newYear > 1944 || (newYear === 1945 && newMonth === 1)) {
+          const score = calculateScore([...prev.builtShips, ...completed]);
+          return { ...prev, year: newYear, month: newMonth, shipyards: updatedYards, builtShips: [...prev.builtShips, ...completed], buildingShips: newBuilding, gamePhase: 'gameover', score, log: newLog };
+        }
+
+        let currentProgram = '—';
+        if (newYear >= 1931 && newYear < 1934) currentProgram = 'マル①';
+        else if (newYear >= 1934 && newYear < 1937) currentProgram = 'マル②';
+        else if (newYear >= 1937 && newYear < 1939) currentProgram = 'マル③';
+        else if (newYear >= 1939 && newYear < 1940) currentProgram = 'マル④';
+        else if (newYear >= 1940 && newYear < 1941) currentProgram = 'マル凛';
+        else if (newYear >= 1941) currentProgram = 'マル級';
+
+        return { ...prev, year: newYear, month: newMonth, shipyards: updatedYards, builtShips: [...prev.builtShips, ...completed], buildingShips: newBuilding, currentProgram, log: newLog };
+      });
+    }, 1000); // Faster for historical mode
+    return () => clearInterval(timer);
+  }, [state.gamePhase, state.isPaused]);
+
   function startBuilding(ship: Ship) {
     setState((prev) => {
       if (prev.budget < ship.cost) return prev;
@@ -517,6 +608,10 @@ function App() {
 
   function startGame() {
     setState({ ...initialState, shipyards: JSON.parse(JSON.stringify(initialShipyards)), gamePhase: 'playing', log: ['1930/01: 🇯🇵 Начало программы Мару-1. Доступны: Курэ, Йокосука, Сасебо, Майдзуру.'], currentProgram: 'マル①' });
+  }
+
+  function startHistorical() {
+    setState({ ...initialState, shipyards: JSON.parse(JSON.stringify(initialShipyards)), gamePhase: 'historical', log: ['1930/01: 📜 Исторический режим. Автоматическая симуляция реального строительства флота 1930-1941.'], currentProgram: 'Мару-1' });
   }
 
   function togglePause() { setState(prev => ({ ...prev, isPaused: !prev.isPaused })); }
@@ -581,9 +676,23 @@ function App() {
             </div>
           </div>
 
-          <button onClick={startGame} className="bg-gradient-to-r from-red-800 to-red-600 hover:from-red-700 hover:to-red-500 text-white font-bold py-4 px-12 rounded-lg text-xl transition-all transform hover:scale-105 shadow-lg shadow-red-900/50 cursor-pointer">
-            🏯 Начать программу Мару-1
-          </button>
+          <div className="bg-slate-800/80 border border-blue-900/50 rounded-lg p-4 mb-4 text-left">
+            <h3 className="text-blue-400 font-bold text-lg mb-2">📜 Исторический режим:</h3>
+            <p className="text-slate-300 text-sm">
+              Автоматическая симуляция реального строительства японского флота 1930-1945.
+              Корабли закладываются в точные исторические даты на реальные верфи и стапели.
+              Наблюдайте, как создавался флот, который пошёл на Пёрл-Харбор!
+            </p>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <button onClick={startGame} className="bg-gradient-to-r from-red-800 to-red-600 hover:from-red-700 hover:to-red-500 text-white font-bold py-4 px-8 rounded-lg text-xl transition-all transform hover:scale-105 shadow-lg shadow-red-900/50 cursor-pointer">
+              🏯 Играть (свободный режим)
+            </button>
+            <button onClick={startHistorical} className="bg-gradient-to-r from-blue-800 to-blue-600 hover:from-blue-700 hover:to-blue-500 text-white font-bold py-4 px-8 rounded-lg text-xl transition-all transform hover:scale-105 shadow-lg shadow-blue-900/50 cursor-pointer">
+              📜 Исторический режим
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -657,6 +766,14 @@ function App() {
   // ============ MAIN GAME ============
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900 text-white">
+      {/* Historical mode banner */}
+      {state.gamePhase === 'historical' && (
+        <div className="bg-gradient-to-r from-blue-900 via-blue-800 to-blue-900 border-b-2 border-amber-500 px-4 py-2 text-center">
+          <span className="text-amber-400 font-bold text-sm">📜 ИСТОРИЧЕСКИЙ РЕЖИМ</span>
+          <span className="text-blue-200 text-xs ml-3">Автоматическая симуляция реального строительства флота 1930-1945</span>
+        </div>
+      )}
+      
       {/* Top bar */}
       <div className="bg-slate-900/90 border-b border-amber-900/50 px-3 py-2 sticky top-0 z-10 backdrop-blur-sm">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-1">
@@ -690,10 +807,10 @@ function App() {
         </div>
 
         {/* Yard info panel */}
-        {showYardInfo && (
+        {(showYardInfo || state.gamePhase === 'historical') && (
           <div className="mb-3 bg-slate-800/80 border border-slate-700 rounded-xl p-3">
             <div className="flex justify-between items-center mb-2">
-              <h3 className="text-sm font-bold text-amber-400">🏭 Верфи и стапели</h3>
+              <h3 className="text-sm font-bold text-amber-400">🏭 Верфи и стапели {state.gamePhase === 'historical' && <span className="text-blue-400 text-xs">(историческое размещение)</span>}</h3>
               <button onClick={() => setShowYardInfo(false)} className="text-slate-400 hover:text-white text-xs cursor-pointer">✕</button>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2 max-h-80 overflow-y-auto">
