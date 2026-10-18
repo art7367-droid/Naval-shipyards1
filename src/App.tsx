@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
-import ShipyardView from './ShipyardView';
+import { useState, useEffect } from 'react';
 
-// ============ TYPES ============
+// ============ ТИПЫ ============
 type ShipType = 'battleship' | 'aircraft_carrier' | 'cruiser' | 'destroyer' | 'submarine' | 'auxiliary';
+type YardType = 'naval' | 'civilian';
 type TreatyStatus = 'london' | 'withdrawn' | 'unrestricted';
 type GamePhase = 'menu' | 'playing' | 'event' | 'gameover';
 
@@ -11,34 +11,60 @@ interface Ship {
   name: string;
   nameJp: string;
   type: ShipType;
-  cost: number; // в млн ¥
-  buildTime: number; // месяцев
+  cost: number;
+  buildTime: number;
   firepower: number;
   speed: number;
   armor: number;
   description: string;
   yearAvailable: number;
-  program: string; // к какой программе относится
+  program: string;
   icon: string;
-  displacement?: number; // водоизмещение в тоннах
+  displacement?: number;
+  length: number; // длина корабля в метрах
+  historicalYard?: string; // на какой верфи строился в реальности
+}
+
+interface Slipway {
+  id: string;
+  length: number;
+  label: string;
+  note: string;
+  expanded?: boolean; // был ли расширен
+}
+
+interface Shipyard {
+  id: string;
+  name: string;
+  nameJp: string;
+  type: YardType;
+  slipways: Slipway[];
+  available: boolean;
+  availableFrom: number; // год, с которого доступна
+  speedBonus: number; // множитель скорости постройки (1.0 = норма)
+  historicalNote: string;
 }
 
 interface BuiltShip extends Ship {
   completionYear: number;
   completionMonth: number;
+  builtAt: string; // ID верфи
+  builtOnSlipway: string; // ID стапеля
 }
 
 interface BuildingEntry {
   ship: Ship;
   completionYear: number;
   completionMonth: number;
+  builtAt: string;
+  builtOnSlipway: string;
 }
 
 interface GameEvent {
   id: string;
   title: string;
   description: string;
-  choices: { text: string; budgetChange: number; shipyardsChange?: number; treatyStatus?: TreatyStatus }[];
+  choices: { text: string; budgetChange: number; shipyardsChange?: number; treatyStatus?: TreatyStatus; unlockYard?: string; expandSlipway?: { yardId: string; slipwayIdx: number; newLength: number } }[];
   year: number;
 }
 
@@ -46,8 +72,7 @@ interface GameState {
   year: number;
   month: number;
   budget: number;
-  shipyards: number;
-  busyShipyards: number;
+  shipyards: Shipyard[];
   builtShips: BuiltShip[];
   buildingShips: BuildingEntry[];
   currentEvent: GameEvent | null;
@@ -59,293 +84,207 @@ interface GameState {
   currentProgram: string;
 }
 
-// ============ РЕАЛЬНЫЕ КОРАБЛИ ПО ПРОГРАММАМ ============
+// ============ РЕАЛЬНЫЕ ВЕРФИ ============
+const initialShipyards: Shipyard[] = [
+  {
+    id: 'kure', name: 'Курэ', nameJp: '呉海軍工廠', type: 'naval',
+    available: true, availableFrom: 1930, speedBonus: 1.0,
+    historicalNote: 'Главная верфь ВМФ. Здесь построен «Ямато».',
+    slipways: [
+      { id: 'kure-1', length: 300, label: 'Большой стапель', note: 'Линкоры (до 266м)' },
+      { id: 'kure-2', length: 225, label: 'Стапель №2', note: 'Авианосцы, крейсеры' },
+      { id: 'kure-3', length: 175, label: 'Стапель №3', note: 'Крейсеры, эсминцы' },
+      { id: 'kure-4', length: 150, label: 'Стапель №4', note: 'Эсминцы, ПЛ' },
+      { id: 'kure-5', length: 150, label: 'Стапель №5', note: 'Эсминцы, ПЛ' },
+    ],
+  },
+  {
+    id: 'yokosuka', name: 'Йокосука', nameJp: '横須賀海軍工廠', type: 'naval',
+    available: true, availableFrom: 1930, speedBonus: 1.0,
+    historicalNote: 'Здесь построены «Сёкаку», «Синано». Док №6 — крупнейший в Японии.',
+    slipways: [
+      { id: 'yoko-1', length: 300, label: 'Большой стапель', note: 'Линкоры' },
+      { id: 'yoko-2', length: 200, label: 'Стапель №2', note: 'Авианосцы, крейсеры' },
+      { id: 'yoko-3', length: 175, label: 'Стапель №3', note: 'Крейсеры' },
+      { id: 'yoko-4', length: 175, label: 'Стапель №4', note: 'Крейсеры' },
+      { id: 'yoko-5', length: 150, label: 'Стапель №5', note: 'Эсминцы' },
+      { id: 'yoko-6', length: 150, label: 'Стапель №6', note: 'Эсминцы' },
+    ],
+  },
+  {
+    id: 'sasebo', name: 'Сасебо', nameJp: '佐世保海軍工廠', type: 'naval',
+    available: true, availableFrom: 1930, speedBonus: 0.95,
+    historicalNote: 'Здесь строились «Агано», «Оёдо». Стапель удлинён для ремонта «Ямато».',
+    slipways: [
+      { id: 'sasebo-1', length: 200, label: 'Стапель №1', note: 'Авианосцы, крейсеры' },
+      { id: 'sasebo-2', length: 175, label: 'Стапель №2', note: 'Крейсеры' },
+      { id: 'sasebo-3', length: 150, label: 'Стапель №3', note: 'Эсминцы' },
+      { id: 'sasebo-4', length: 150, label: 'Стапель №4', note: 'Эсминцы' },
+      { id: 'sasebo-5', length: 150, label: 'Стапель №5', note: 'Эсминцы' },
+    ],
+  },
+  {
+    id: 'maizuru', name: 'Майдзуру', nameJp: '舞鶴海軍工廠', type: 'naval',
+    available: true, availableFrom: 1930, speedBonus: 0.9,
+    historicalNote: 'Малая верфь. Только эсминцы и подлодки.',
+    slipways: [
+      { id: 'maizuru-1', length: 150, label: 'Стапель №1', note: 'Эсминцы' },
+      { id: 'maizuru-2', length: 125, label: 'Стапель №2', note: 'Эсминцы' },
+      { id: 'maizuru-3', length: 125, label: 'Стапель №3', note: 'Эсминцы' },
+      { id: 'maizuru-4', length: 125, label: 'Стапель №4', note: 'Эсминцы' },
+      { id: 'maizuru-5', length: 125, label: 'Стапель №5', note: 'Эсминцы' },
+    ],
+  },
+  // Гражданские верфи — открываются позже
+  {
+    id: 'nagasaki', name: 'Мицубиси Нагасаки', nameJp: '三菱長崎造船所', type: 'civilian',
+    available: false, availableFrom: 1934, speedBonus: 1.05,
+    historicalNote: 'Здесь построен «Мусаси». Стапель удлинён до 295м специально для него.',
+    slipways: [
+      { id: 'naga-1', length: 275, label: 'Большой стапель', note: 'Линкоры (удлинён до 295м)' },
+      { id: 'naga-2', length: 225, label: 'Стапель №2', note: 'Авианосцы' },
+      { id: 'naga-3', length: 150, label: 'Стапель №3', note: 'Крейсеры' },
+      { id: 'naga-4', length: 150, label: 'Стапель №4', note: 'Крейсеры' },
+      { id: 'naga-5', length: 125, label: 'Стапель №5', note: 'Эсминцы' },
+      { id: 'naga-6', length: 125, label: 'Стапель №6', note: 'Эсминцы' },
+    ],
+  },
+  {
+    id: 'kawasaki', name: 'Кавасаки Кобе', nameJp: '川崎神戸造船所', type: 'civilian',
+    available: false, availableFrom: 1934, speedBonus: 1.05,
+    historicalNote: 'Здесь построены «Дзуйкаку», «Тайхо», «Хию».',
+    slipways: [
+      { id: 'kawa-1', length: 250, label: 'Большой стапель', note: 'Авианосцы (до 242м)' },
+      { id: 'kawa-2', length: 150, label: 'Стапель №2', note: 'Эсминцы' },
+      { id: 'kawa-3', length: 150, label: 'Стапель №3', note: 'Эсминцы' },
+      { id: 'kawa-4', length: 100, label: 'Стапель №4', note: 'Подлодки' },
+      { id: 'kawa-5', length: 100, label: 'Стапель №5', note: 'Подлодки' },
+    ],
+  },
+  {
+    id: 'uraga', name: 'Урага', nameJp: '浦賀船渠', type: 'civilian',
+    available: false, availableFrom: 1936, speedBonus: 0.95,
+    historicalNote: 'Здесь построен «Рюдзё». Малые эсминцы и подлодки.',
+    slipways: [
+      { id: 'uraga-1', length: 150, label: 'Стапель №1', note: 'Эсминцы' },
+      { id: 'uraga-2', length: 125, label: 'Стапель №2', note: 'Эсминцы' },
+      { id: 'uraga-3', length: 125, label: 'Стапель №3', note: 'Эсминцы' },
+      { id: 'uraga-4', length: 100, label: 'Стапель №4', note: 'Подлодки' },
+    ],
+  },
+  {
+    id: 'fujinagata', name: 'Фудзинагата', nameJp: '藤永田造船所', type: 'civilian',
+    available: false, availableFrom: 1937, speedBonus: 0.9,
+    historicalNote: 'Малая верфь в Осаке. Только эсминцы.',
+    slipways: [
+      { id: 'fuji-1', length: 125, label: 'Стапель №1', note: 'Эсминцы' },
+      { id: 'fuji-2', length: 125, label: 'Стапель №2', note: 'Эсминцы' },
+      { id: 'fuji-3', length: 125, label: 'Стапель №3', note: 'Эсминцы' },
+    ],
+  },
+];
+
+// ============ КОРАБЛИ (с реальной длиной) ============
 const shipTemplates: Ship[] = [
-  // === マル①計画 (Maru 1, 1931) ===
-  {
-    id: 'mogami', name: 'Могами', nameJp: '最上', type: 'cruiser',
-    cost: 30, buildTime: 30, firepower: 45, speed: 35, armor: 30,
-    description: 'Лёгкий крейсер (формально), позже перевооружён 203-мм. 15 орудий.',
-    yearAvailable: 1931, program: 'マル①', icon: '🚢', displacement: 11213,
-  },
-  {
-    id: 'mikuma', name: 'Микума', nameJp: '三隈', type: 'cruiser',
-    cost: 30, buildTime: 30, firepower: 45, speed: 35, armor: 30,
-    description: 'Крейсер типа «Могами». 15 × 155-мм орудий.',
-    yearAvailable: 1931, program: 'マル①', icon: '🚢', displacement: 11213,
-  },
-  {
-    id: 'hatsuharu', name: 'Хатсухару', nameJp: '初春', type: 'destroyer',
-    cost: 10, buildTime: 18, firepower: 16, speed: 36, armor: 6,
-    description: 'Эсминец 1-го класса. 3 × 127-мм, 6 ТА. 12 единиц по плану.',
-    yearAvailable: 1931, program: 'マル①', icon: '🔹', displacement: 1400,
-  },
-  {
-    id: 'shiratsuyu', name: 'Сирацую', nameJp: '白露', type: 'destroyer',
-    cost: 11, buildTime: 18, firepower: 18, speed: 34, armor: 7,
-    description: 'Улучшенный эсминец (переделка из «Хатсухару»). 4 × 127-мм.',
-    yearAvailable: 1932, program: 'マル①', icon: '🔹', displacement: 1685,
-  },
-  {
-    id: 'chidori', name: 'Тидори', nameJp: '千鳥', type: 'auxiliary',
-    cost: 5, buildTime: 12, firepower: 10, speed: 30, armor: 4,
-    description: 'Торпедный катер. 4 × 533-мм ТА. 4 единицы.',
-    yearAvailable: 1931, program: 'マル①', icon: '⚡', displacement: 535,
-  },
-  {
-    id: 'i6', name: 'I-6 (Junsen II)', nameJp: '巡潜II', type: 'submarine',
-    cost: 15, buildTime: 24, firepower: 22, speed: 23, armor: 12,
-    description: 'Крейсерская ПЛ. 2 × 140-мм, 6 ТА 533-мм.',
-    yearAvailable: 1931, program: 'マル①', icon: '🔻', displacement: 2250,
-  },
-  {
-    id: 'kaidai_vi', name: 'Кайдай VI (I-68)', nameJp: '海大VI', type: 'submarine',
-    cost: 12, buildTime: 20, firepower: 18, speed: 21, armor: 10,
-    description: 'Большая ПЛ. 6 единиц. 1 × 120-мм, 6 ТА.',
-    yearAvailable: 1931, program: 'マル①', icon: '🔻', displacement: 1800,
-  },
-  {
-    id: 'ro33', name: 'Ro-33 (Kaichu VI)', nameJp: '海中VI', type: 'submarine',
-    cost: 8, buildTime: 16, firepower: 12, speed: 19, armor: 8,
-    description: 'Средняя ПЛ. 2 единицы. 4 ТА 533-мм.',
-    yearAvailable: 1931, program: 'マル①', icon: '🔻', displacement: 1060,
-  },
+  // Мару-1 (1931)
+  { id: 'mogami', name: 'Могами', nameJp: '最上', type: 'cruiser', cost: 30, buildTime: 30, firepower: 45, speed: 35, armor: 30, description: 'Лёгкий крейсер. 15×155-мм. Позже перевооружён 203-мм.', yearAvailable: 1931, program: 'マル①', icon: '🚢', displacement: 11213, length: 201, historicalYard: 'kure' },
+  { id: 'mikuma', name: 'Микума', nameJp: '三隈', type: 'cruiser', cost: 30, buildTime: 30, firepower: 45, speed: 35, armor: 30, description: 'Крейсер типа «Могами». 15×155-мм.', yearAvailable: 1931, program: 'マル①', icon: '🚢', displacement: 11213, length: 201, historicalYard: 'kure' },
+  { id: 'hatsuharu', name: 'Хатсухару', nameJp: '初春', type: 'destroyer', cost: 10, buildTime: 18, firepower: 16, speed: 36, armor: 6, description: 'Эсминец. 3×127-мм, 6 ТА. 12 ед.', yearAvailable: 1931, program: 'マル①', icon: '🔹', displacement: 1400, length: 103, historicalYard: 'yokosuka' },
+  { id: 'shiratsuyu', name: 'Сирацую', nameJp: '白露', type: 'destroyer', cost: 11, buildTime: 18, firepower: 18, speed: 34, armor: 7, description: 'Улучшенный эсминец. 4×127-мм.', yearAvailable: 1932, program: 'マル①', icon: '🔹', displacement: 1685, length: 107, historicalYard: 'sasebo' },
+  { id: 'chidori', name: 'Тидори', nameJp: '千鳥', type: 'auxiliary', cost: 5, buildTime: 12, firepower: 10, speed: 30, armor: 4, description: 'Торпедный катер. 4 ТА. 4 ед.', yearAvailable: 1931, program: 'マル①', icon: '⚡', displacement: 535, length: 80, historicalYard: 'uraga' },
+  { id: 'i6', name: 'I-6 (Junsen II)', nameJp: '巡潜II', type: 'submarine', cost: 15, buildTime: 24, firepower: 22, speed: 23, armor: 12, description: 'Крейсерская ПЛ. 2×140-мм, 6 ТА.', yearAvailable: 1931, program: 'マル①', icon: '🔻', displacement: 2250, length: 105, historicalYard: 'kawasaki' },
+  { id: 'kaidai_vi', name: 'Кайдай VI', nameJp: '海大VI', type: 'submarine', cost: 12, buildTime: 20, firepower: 18, speed: 21, armor: 10, description: 'Большая ПЛ. 6 ед. 1×120-мм, 6 ТА.', yearAvailable: 1931, program: 'マル①', icon: '🔻', displacement: 1800, length: 100, historicalYard: 'kawasaki' },
+  { id: 'ro33', name: 'Ro-33', nameJp: '海中VI', type: 'submarine', cost: 8, buildTime: 16, firepower: 12, speed: 19, armor: 8, description: 'Средняя ПЛ. 2 ед. 4 ТА.', yearAvailable: 1931, program: 'マル①', icon: '🔻', displacement: 1060, length: 80, historicalYard: 'kawasaki' },
 
-  // === マル②計画 (Maru 2, 1934) ===
-  {
-    id: 'tone', name: 'Тоне', nameJp: '利根', type: 'cruiser',
-    cost: 35, buildTime: 32, firepower: 42, speed: 35, armor: 32,
-    description: 'Тяжёлый крейсер-разведчик. Все 8 × 203-мм в носу. 2 ед.',
-    yearAvailable: 1934, program: 'マル②', icon: '🚢', displacement: 11213,
-  },
-  {
-    id: 'soryu', name: 'Сорю', nameJp: '蒼龍', type: 'aircraft_carrier',
-    cost: 60, buildTime: 36, firepower: 55, speed: 34, armor: 28,
-    description: 'Авианосец. 63 самолёта. 2 ед. (2-й стал «Хирю»).',
-    yearAvailable: 1934, program: 'マル②', icon: '🛩️', displacement: 15900,
-  },
-  {
-    id: 'asashio', name: 'Асасио', nameJp: '朝潮', type: 'destroyer',
-    cost: 12, buildTime: 18, firepower: 20, speed: 35, armor: 8,
-    description: 'Эсминец. 6 × 127-мм, 8 ТА. 10 единиц.',
-    yearAvailable: 1934, program: 'マル②', icon: '🔹', displacement: 2370,
-  },
-  {
-    id: 'otori', name: 'Отори', nameJp: '鴻', type: 'auxiliary',
-    cost: 6, buildTime: 14, firepower: 12, speed: 31, armor: 5,
-    description: 'Торпедный катер. 3 × 120-мм, 6 ТА. 16 единиц.',
-    yearAvailable: 1934, program: 'マル②', icon: '⚡', displacement: 860,
-  },
-  {
-    id: 'junsen_iii', name: 'Junsen III (I-7)', nameJp: '巡潜III', type: 'submarine',
-    cost: 16, buildTime: 24, firepower: 24, speed: 23, armor: 13,
-    description: 'Крейсерская ПЛ. 1 × гидросамолёт, 6 ТА. 2 ед.',
-    yearAvailable: 1934, program: 'マル②', icon: '🔻', displacement: 2400,
-  },
-  {
-    id: 'chitose', name: 'Титосэ', nameJp: '千歳', type: 'auxiliary',
-    cost: 25, buildTime: 28, firepower: 15, speed: 29, armor: 15,
-    description: 'Тендер гидросамолётов (10000 т). Позже → авианосец. 2 ед.',
-    yearAvailable: 1934, program: 'マル②', icon: '🛩️', displacement: 11200,
-  },
+  // Мару-2 (1934)
+  { id: 'tone', name: 'Тоне', nameJp: '利根', type: 'cruiser', cost: 35, buildTime: 32, firepower: 42, speed: 35, armor: 32, description: 'Тяжёлый крейсер-разведчик. 8×203-мм в носу. 2 ед.', yearAvailable: 1934, program: 'マル②', icon: '🚢', displacement: 11213, length: 201, historicalYard: 'kawasaki' },
+  { id: 'soryu', name: 'Сорю', nameJp: '蒼龍', type: 'aircraft_carrier', cost: 60, buildTime: 36, firepower: 55, speed: 34, armor: 28, description: 'Авианосец. 63 самолёта. 2 ед.', yearAvailable: 1934, program: 'マル②', icon: '🛩️', displacement: 15900, length: 228, historicalYard: 'kure' },
+  { id: 'asashio', name: 'Асасио', nameJp: '朝潮', type: 'destroyer', cost: 12, buildTime: 18, firepower: 20, speed: 35, armor: 8, description: 'Эсминец. 6×127-мм, 8 ТА. 10 ед.', yearAvailable: 1934, program: 'マル②', icon: '🔹', displacement: 2370, length: 118, historicalYard: 'sasebo' },
+  { id: 'otori', name: 'Отори', nameJp: '鴻', type: 'auxiliary', cost: 6, buildTime: 14, firepower: 12, speed: 31, armor: 5, description: 'Торпедный катер. 16 ед.', yearAvailable: 1934, program: 'マル②', icon: '⚡', displacement: 860, length: 83, historicalYard: 'uraga' },
+  { id: 'junsen_iii', name: 'Junsen III (I-7)', nameJp: '巡潜III', type: 'submarine', cost: 16, buildTime: 24, firepower: 24, speed: 23, armor: 13, description: 'Крейсерская ПЛ. 2 ед. 6 ТА.', yearAvailable: 1934, program: 'マル②', icon: '🔻', displacement: 2400, length: 109, historicalYard: 'kawasaki' },
+  { id: 'chitose', name: 'Титосэ', nameJp: '千歳', type: 'auxiliary', cost: 25, buildTime: 28, firepower: 15, speed: 29, armor: 15, description: 'Тендер гидросамолётов. 2 ед.', yearAvailable: 1934, program: 'マル②', icon: '🛩️', displacement: 11200, length: 192, historicalYard: 'yokosuka' },
 
-  // === マル③計画 (Maru 3, 1937) ===
-  {
-    id: 'yamato', name: 'Ямато', nameJp: '大和', type: 'battleship',
-    cost: 150, buildTime: 48, firepower: 100, speed: 27, armor: 100,
-    description: 'Суперлинкор. 9 × 460-мм. 72 800 т. №1. Совершенно секретно!',
-    yearAvailable: 1937, program: 'マル③', icon: '⚓', displacement: 72800,
-  },
-  {
-    id: 'musashi', name: 'Мусаси', nameJp: '武蔵', type: 'battleship',
-    cost: 150, buildTime: 48, firepower: 100, speed: 27, armor: 100,
-    description: 'Суперлинкор. 9 × 460-мм. 72 800 т. №2. Строится в Нагасаки.',
-    yearAvailable: 1937, program: 'マル③', icon: '⚓', displacement: 72800,
-  },
-  {
-    id: 'shokaku', name: 'Сёкаку', nameJp: '翔鶴', type: 'aircraft_carrier',
-    cost: 80, buildTime: 36, firepower: 75, speed: 34, armor: 40,
-    description: 'Авианосец. 84 самолёта. №3. Лучший японский авианосец.',
-    yearAvailable: 1937, program: 'マル③', icon: '🛩️', displacement: 25675,
-  },
-  {
-    id: 'zuikaku', name: 'Дзуйкаку', nameJp: '瑞鶴', type: 'aircraft_carrier',
-    cost: 80, buildTime: 36, firepower: 75, speed: 34, armor: 40,
-    description: 'Авианосец. 84 самолёта. №4. Sister-ship «Сёкаку».',
-    yearAvailable: 1937, program: 'マル③', icon: '🛩️', displacement: 25675,
-  },
-  {
-    id: 'kagero', name: 'Кагэро', nameJp: '陽炎', type: 'destroyer',
-    cost: 14, buildTime: 20, firepower: 22, speed: 35, armor: 9,
-    description: 'Эсминец 1-го класса. 6 × 127-мм, 8 ТА. 18 ед. (15 реальных).',
-    yearAvailable: 1937, program: 'マル③', icon: '🔹', displacement: 2529,
-  },
-  {
-    id: 'i9', name: 'I-9 (Тип A)', nameJp: '巡潜甲', type: 'submarine',
-    cost: 18, buildTime: 26, firepower: 26, speed: 23, armor: 14,
-    description: 'Крейсерская ПЛ-лидер. 1 × 140-мм, 1 × гидросам., 8 ТА. 2 ед.',
-    yearAvailable: 1937, program: 'マル③', icon: '🔻', displacement: 2600,
-  },
-  {
-    id: 'i15', name: 'I-15 (Тип B)', nameJp: '巡潜乙', type: 'submarine',
-    cost: 16, buildTime: 24, firepower: 24, speed: 24, armor: 13,
-    description: 'Крейсерская ПЛ. 1 × 140-мм, 1 × гидросам., 6 ТА. 7 ед.',
-    yearAvailable: 1937, program: 'マル③', icon: '🔻', displacement: 2600,
-  },
-  {
-    id: 'i16', name: 'I-16 (Тип C)', nameJp: '巡潜丙', type: 'submarine',
-    cost: 17, buildTime: 24, firepower: 28, speed: 23, armor: 13,
-    description: 'ПЛ-торпедоносец. 2 × 140-мм, 6 ТА + 1 мини-суб. 5 ед.',
-    yearAvailable: 1937, program: 'マル③', icon: '🔻', displacement: 2600,
-  },
-  {
-    id: 'shimushu', name: 'Симусю', nameJp: '占守', type: 'auxiliary',
-    cost: 8, buildTime: 16, firepower: 10, speed: 20, armor: 8,
-    description: 'Эскортный корабль. 4 × 120-мм. 4 единицы.',
-    yearAvailable: 1937, program: 'マル③', icon: '🛡️', displacement: 860,
-  },
+  // Мару-3 (1937)
+  { id: 'yamato', name: 'Ямато', nameJp: '大和', type: 'battleship', cost: 150, buildTime: 48, firepower: 100, speed: 27, armor: 100, description: 'Суперлинкор. 9×460-мм. 72 800 т. СОВЕРШЕННО СЕКРЕТНО!', yearAvailable: 1937, program: 'マル③', icon: '⚓', displacement: 72800, length: 266, historicalYard: 'kure' },
+  { id: 'musashi', name: 'Мусаси', nameJp: '武蔵', type: 'battleship', cost: 150, buildTime: 48, firepower: 100, speed: 27, armor: 100, description: 'Суперлинкор. 9×460-мм. 72 800 т. Строится в Нагасаки.', yearAvailable: 1937, program: 'マル③', icon: '⚓', displacement: 72800, length: 266, historicalYard: 'nagasaki' },
+  { id: 'shokaku', name: 'Сёкаку', nameJp: '翔鶴', type: 'aircraft_carrier', cost: 80, buildTime: 36, firepower: 75, speed: 34, armor: 40, description: 'Авианосец. 84 самолёта. Лучший японский АВ.', yearAvailable: 1937, program: 'マル③', icon: '🛩️', displacement: 25675, length: 242, historicalYard: 'yokosuka' },
+  { id: 'zuikaku', name: 'Дзуйкаку', nameJp: '瑞鶴', type: 'aircraft_carrier', cost: 80, buildTime: 36, firepower: 75, speed: 34, armor: 40, description: 'Авианосец. 84 самолёта. Sister-ship «Сёкаку».', yearAvailable: 1937, program: 'マル③', icon: '🛩️', displacement: 25675, length: 242, historicalYard: 'kawasaki' },
+  { id: 'kagero', name: 'Кагэро', nameJp: '陽炎', type: 'destroyer', cost: 14, buildTime: 20, firepower: 22, speed: 35, armor: 9, description: 'Эсминец 1-го класса. 6×127-мм, 8 ТА. 18 ед.', yearAvailable: 1937, program: 'マル③', icon: '🔹', displacement: 2529, length: 118.5, historicalYard: 'maizuru' },
+  { id: 'i9', name: 'I-9 (Тип A)', nameJp: '巡潜甲', type: 'submarine', cost: 18, buildTime: 26, firepower: 26, speed: 23, armor: 14, description: 'ПЛ-лидер. 1×140-мм, 1×гидросам., 8 ТА. 2 ед.', yearAvailable: 1937, program: 'マル③', icon: '🔻', displacement: 2600, length: 109, historicalYard: 'kawasaki' },
+  { id: 'i15', name: 'I-15 (Тип B)', nameJp: '巡潜乙', type: 'submarine', cost: 16, buildTime: 24, firepower: 24, speed: 24, armor: 13, description: 'Крейсерская ПЛ. 7 ед. 6 ТА.', yearAvailable: 1937, program: 'マル③', icon: '🔻', displacement: 2600, length: 109, historicalYard: 'kawasaki' },
+  { id: 'i16', name: 'I-16 (Тип C)', nameJp: '巡潜丙', type: 'submarine', cost: 17, buildTime: 24, firepower: 28, speed: 23, armor: 13, description: 'ПЛ-торпедоносец. 5 ед.', yearAvailable: 1937, program: 'マル③', icon: '🔻', displacement: 2600, length: 109, historicalYard: 'kawasaki' },
+  { id: 'shimushu', name: 'Симусю', nameJp: '占守', type: 'auxiliary', cost: 8, buildTime: 16, firepower: 10, speed: 20, armor: 8, description: 'Эскортный корабль. 4 ед.', yearAvailable: 1937, program: 'マル③', icon: '🛡️', displacement: 860, length: 81, historicalYard: 'sasebo' },
 
-  // === マル④計画 (Maru 4, 1939) ===
-  {
-    id: 'shinano', name: 'Синано', nameJp: '信濃', type: 'battleship',
-    cost: 150, buildTime: 48, firepower: 100, speed: 27, armor: 100,
-    description: '3-й линкор «Ямато». №110. Позже переделан в авианосец.',
-    yearAvailable: 1939, program: 'マル④', icon: '⚓', displacement: 72800,
-  },
-  {
-    id: 'taiho', name: 'Тайхо', nameJp: '大鳳', type: 'aircraft_carrier',
-    cost: 90, buildTime: 38, firepower: 70, speed: 33, armor: 55,
-    description: 'Бронепалубный авианосец. 60 самолётов. №130.',
-    yearAvailable: 1939, program: 'マル④', icon: '🛩️', displacement: 29300,
-  },
-  {
-    id: 'agano', name: 'Агано', nameJp: '阿賀野', type: 'cruiser',
-    cost: 30, buildTime: 26, firepower: 30, speed: 35, armor: 22,
-    description: 'Лёгкий крейсер (лидер эсминцев). 6 × 152-мм, 8 ТА. 4 ед.',
-    yearAvailable: 1939, program: 'マル④', icon: '🚢', displacement: 6850,
-  },
-  {
-    id: 'oyodo', name: 'Оёдо', nameJp: '大淀', type: 'cruiser',
-    cost: 35, buildTime: 28, firepower: 35, speed: 35, armor: 25,
-    description: 'Крейсер-штаб. 6 × 155-мм в носу. 2 ед. (построен 1).',
-    yearAvailable: 1939, program: 'マル④', icon: '🚢', displacement: 8160,
-  },
-  {
-    id: 'yugumo', name: 'Югумо', nameJp: '夕雲', type: 'destroyer',
-    cost: 15, buildTime: 20, firepower: 24, speed: 35, armor: 10,
-    description: 'Улучшенный «Кагэро». 6 × 127-мм, 8 ТА. 15 ед.',
-    yearAvailable: 1939, program: 'マル④', icon: '🔹', displacement: 2560,
-  },
-  {
-    id: 'akizuki', name: 'Акидзуки', nameJp: '秋月', type: 'destroyer',
-    cost: 18, buildTime: 22, firepower: 28, speed: 33, armor: 10,
-    description: 'ПЛО-эсминец. 8 × 100-мм зенитных. 6 ед.',
-    yearAvailable: 1939, program: 'マル④', icon: '🔹', displacement: 2700,
-  },
-  {
-    id: 'shimakaze', name: 'Симакадзэ', nameJp: '島風', type: 'destroyer',
-    cost: 20, buildTime: 24, firepower: 22, speed: 40, armor: 9,
-    description: 'Экспериментальный суперэсминец. 39.4 узла! 15 ТА. 1 ед.',
-    yearAvailable: 1939, program: 'マル④', icon: '🔹', displacement: 2567,
-  },
+  // Мару-4 (1939)
+  { id: 'shinano', name: 'Синано', nameJp: '信濃', type: 'battleship', cost: 150, buildTime: 48, firepower: 100, speed: 27, armor: 100, description: '3-й линкор «Ямато». Позже → авианосец.', yearAvailable: 1939, program: 'マル④', icon: '⚓', displacement: 72800, length: 266, historicalYard: 'yokosuka' },
+  { id: 'taiho', name: 'Тайхо', nameJp: '大鳳', type: 'aircraft_carrier', cost: 90, buildTime: 38, firepower: 70, speed: 33, armor: 55, description: 'Бронепалубный авианосец. 60 самолётов.', yearAvailable: 1939, program: 'マル④', icon: '🛩️', displacement: 29300, length: 262, historicalYard: 'kawasaki' },
+  { id: 'agano', name: 'Агано', nameJp: '阿賀野', type: 'cruiser', cost: 30, buildTime: 26, firepower: 30, speed: 35, armor: 22, description: 'Лёгкий крейсер-лидер. 6×152-мм, 8 ТА. 4 ед.', yearAvailable: 1939, program: 'マル④', icon: '🚢', displacement: 6850, length: 174, historicalYard: 'sasebo' },
+  { id: 'oyodo', name: 'Оёдо', nameJp: '大淀', type: 'cruiser', cost: 35, buildTime: 28, firepower: 35, speed: 35, armor: 25, description: 'Крейсер-штаб. 6×155-мм в носу.', yearAvailable: 1939, program: 'マル④', icon: '🚢', displacement: 8160, length: 192, historicalYard: 'kure' },
+  { id: 'yugumo', name: 'Югумо', nameJp: '夕雲', type: 'destroyer', cost: 15, buildTime: 20, firepower: 24, speed: 35, armor: 10, description: 'Улучшенный «Кагэро». 15 ед.', yearAvailable: 1939, program: 'マル④', icon: '🔹', displacement: 2560, length: 119, historicalYard: 'maizuru' },
+  { id: 'akizuki', name: 'Акидзуки', nameJp: '秋月', type: 'destroyer', cost: 18, buildTime: 22, firepower: 28, speed: 33, armor: 10, description: 'ПЛО-эсминец. 8×100-мм зенитных. 6 ед.', yearAvailable: 1939, program: 'マル④', icon: '🔹', displacement: 2700, length: 134, historicalYard: 'maizuru' },
+  { id: 'shimakaze', name: 'Симакадзэ', nameJp: '島風', type: 'destroyer', cost: 20, buildTime: 24, firepower: 22, speed: 40, armor: 9, description: 'Суперэсминец. 39.4 узла! 1 ед.', yearAvailable: 1939, program: 'マル④', icon: '🔹', displacement: 2567, length: 130, historicalYard: 'kawasaki' },
 
-  // === マル凛計画 (Maru Rin, 1940) ===
-  {
-    id: 'ro35', name: 'Ro-35 (Средняя)', nameJp: '中型潜', type: 'submarine',
-    cost: 9, buildTime: 16, firepower: 14, speed: 19, armor: 8,
-    description: 'Средняя ПЛ. 4 ТА. 9 ед.',
-    yearAvailable: 1940, program: 'マル凛', icon: '🔻', displacement: 1100,
-  },
-  {
-    id: 'ro100', name: 'Ro-100 (Средняя)', nameJp: '中型潜改', type: 'submarine',
-    cost: 8, buildTime: 14, firepower: 12, speed: 19, armor: 7,
-    description: 'Упрощённая средняя ПЛ. 4 ТА. 9 ед.',
-    yearAvailable: 1940, program: 'マル凛', icon: '🔻', displacement: 990,
-  },
+  // Мару-Рин (1940)
+  { id: 'ro35', name: 'Ro-35', nameJp: '中型潜', type: 'submarine', cost: 9, buildTime: 16, firepower: 14, speed: 19, armor: 8, description: 'Средняя ПЛ. 4 ТА. 9 ед.', yearAvailable: 1940, program: 'マル凛', icon: '🔻', displacement: 1100, length: 80, historicalYard: 'kawasaki' },
+  { id: 'ro100', name: 'Ro-100', nameJp: '中型潜改', type: 'submarine', cost: 8, buildTime: 14, firepower: 12, speed: 19, armor: 7, description: 'Упрощённая ПЛ. 4 ТА. 9 ед.', yearAvailable: 1940, program: 'マル凛', icon: '🔻', displacement: 990, length: 76, historicalYard: 'kawasaki' },
 
-  // === マル級計画 (Maru Kyū, 1941) ===
-  {
-    id: 'unryu', name: 'Унрю', nameJp: '雲龍', type: 'aircraft_carrier',
-    cost: 65, buildTime: 28, firepower: 55, speed: 34, armor: 30,
-    description: 'Авианосец (упрощённый). 65 самолётов. №302.',
-    yearAvailable: 1941, program: 'マル級', icon: '🛩️', displacement: 17150,
-  },
-  {
-    id: 'ibuki', name: 'Ибуки', nameJp: '伊吹', type: 'cruiser',
-    cost: 40, buildTime: 30, firepower: 40, speed: 35, armor: 28,
-    description: 'Тяжёлый крейсер. 10 × 203-мм. Позже → авианосец. 2 ед.',
-    yearAvailable: 1941, program: 'マル級', icon: '🚢', displacement: 12500,
-  },
-  {
-    id: 'etorofu', name: 'Эторофу', nameJp: '択捉', type: 'auxiliary',
-    cost: 6, buildTime: 12, firepower: 8, speed: 20, armor: 6,
-    description: 'Эскортный корабль. 4 × 120-мм. 30 единиц (упрощённые).',
-    yearAvailable: 1941, program: 'マル級', icon: '🛡️', displacement: 870,
-  },
-  {
-    id: 'i40', name: 'I-40 (Тип B мод.)', nameJp: '巡潜乙改', type: 'submarine',
-    cost: 17, buildTime: 22, firepower: 25, speed: 24, armor: 13,
-    description: 'Крейсерская ПЛ. Улучшенный Тип B. 6 ед.',
-    yearAvailable: 1941, program: 'マル級', icon: '🔻', displacement: 2600,
-  },
+  // Мару-Кю (1941)
+  { id: 'unryu', name: 'Унрю', nameJp: '雲龍', type: 'aircraft_carrier', cost: 65, buildTime: 28, firepower: 55, speed: 34, armor: 30, description: 'Авианосец (упрощённый). 65 самолётов.', yearAvailable: 1941, program: 'マル級', icon: '🛩️', displacement: 17150, length: 227, historicalYard: 'yokosuka' },
+  { id: 'ibuki', name: 'Ибуки', nameJp: '伊吹', type: 'cruiser', cost: 40, buildTime: 30, firepower: 40, speed: 35, armor: 28, description: 'Тяжёлый крейсер. 10×203-мм. 2 ед.', yearAvailable: 1941, program: 'マル級', icon: '🚢', displacement: 12500, length: 201, historicalYard: 'kawasaki' },
+  { id: 'etorofu', name: 'Эторофу', nameJp: '択捉', type: 'auxiliary', cost: 6, buildTime: 12, firepower: 8, speed: 20, armor: 6, description: 'Эскортный корабль. 30 ед.', yearAvailable: 1941, program: 'マル級', icon: '🛡️', displacement: 870, length: 87, historicalYard: 'sasebo' },
+  { id: 'i40', name: 'I-40 (Тип B мод.)', nameJp: '巡潜乙改', type: 'submarine', cost: 17, buildTime: 22, firepower: 25, speed: 24, armor: 13, description: 'Улучшенный Тип B. 6 ед.', yearAvailable: 1941, program: 'マル級', icon: '🔻', displacement: 2600, length: 109, historicalYard: 'kawasaki' },
 ];
 
 // ============ ИСТОРИЧЕСКИЕ СОБЫТИЯ ============
 const historicalEvents: GameEvent[] = [
   {
-    id: 'london_treaty',
-    title: '📜 Лондонское морское соглашение (1930)',
-    description: 'Подписан Лондонский договор. Япония получает квоту 6:10 от США по линкорам, но может строить крейсеры и подлодки до 7:10. Бюджет Мару-1: ¥247 млн.',
+    id: 'london_treaty', title: '📜 Лондонское соглашение (1930)',
+    description: 'Подписан Лондонский договор. Квота 6:10 от США. Бюджет Мару-1: ¥247 млн. Доступны 4 военно-морских арсенала.',
     year: 1930,
     choices: [
-      { text: 'Принять договор — начать программу Мару-1 (+100 млн ¥)', budgetChange: 100, treatyStatus: 'london' },
+      { text: 'Принять договор (+100 млн ¥)', budgetChange: 100, treatyStatus: 'london' },
       { text: 'Протестовать, но подписать (+50 млн ¥)', budgetChange: 50, treatyStatus: 'london' },
     ],
   },
   {
-    id: 'tomozuru_incident',
-    title: '⚠️ Инцидент с «Томодзуру» (1934)',
-    description: 'Торпедный катер «Томодзуру» перевернулся в шторм! Выяснилось, что многие корабли перегружены вооружением. Нужна программа модернизации.',
+    id: 'civilian_yards', title: '🏭 Мобилизация гражданских верфей (1934)',
+    description: 'Верфи Mitsubishi (Нагасаки) и Kawasaki (Кобе) готовы строить военные корабли. Это удвоит возможности флота!',
     year: 1934,
     choices: [
-      { text: 'Запустить Мару-2 — ¥432 млн на новые корабли (+150 млн ¥)', budgetChange: 150 },
-      { text: 'Минимальная модернизация (+80 млн ¥)', budgetChange: 80 },
+      { text: 'Мобилизовать обе верфи (Нагасаки + Кавасаки)', budgetChange: 50, unlockYard: 'nagasaki' },
+      { text: 'Только Нагасаки (для крупных кораблей)', budgetChange: 30, unlockYard: 'nagasaki' },
     ],
   },
   {
-    id: 'treaty_withdrawal',
-    title: '🚫 Выход из морских договоров (1934)',
-    description: 'Япония выходит из Вашингтонского и Лондонского договоров. Начинается ничем не ограниченная гонка вооружений!',
+    id: 'treaty_withdrawal', title: '🚫 Выход из договоров (1935)',
+    description: 'Япония выходит из морских договоров. Начинается гонка вооружений! Можно расширять стапели.',
     year: 1935,
     choices: [
-      { text: 'Начать секретный проект «А» (линкоры 460-мм)', budgetChange: 100, treatyStatus: 'withdrawn' },
-      { text: 'Сосредоточиться на авианосцах', budgetChange: 150, treatyStatus: 'withdrawn' },
+      { text: 'Удлинить стапель в Нагасаки до 295м (для «Мусаси») (-60 млн ¥)', budgetChange: -60, treatyStatus: 'withdrawn', expandSlipway: { yardId: 'nagasaki', slipwayIdx: 0, newLength: 295 } },
+      { text: 'Расширить верфи (+150 млн ¥, открыть Урага)', budgetChange: 150, treatyStatus: 'withdrawn', unlockYard: 'uraga' },
     ],
   },
   {
-    id: 'type93_torpedo',
-    title: '🎯 Торпеда Тип 93 «Длинное копьё» (1936)',
-    description: 'Секретная кислородная торпеда. Дальность 40 км, скорость 50 узлов — в 3 раза дальше американских!',
+    id: 'type93_torpedo', title: '🎯 Торпеда Тип 93 (1936)',
+    description: 'Секретная кислородная торпеда. Дальность 40 км, скорость 50 узлов!',
     year: 1936,
     choices: [
-      { text: 'Оснастить все эсминцы (-20 млн ¥)', budgetChange: -20 },
-      { text: 'Использовать выборочно', budgetChange: 0 },
+      { text: 'Инвестировать в производство (-20 млн ¥)', budgetChange: -20 },
+      { text: 'Использовать как есть', budgetChange: 0 },
     ],
   },
   {
-    id: 'maru3_start',
-    title: '🔱 Программа Мару-3 (1937)',
-    description: 'Утверждена крупнейшая программа: ¥807 млн! Включает 2 линкора «Ямато», 2 авианосца «Сёкаку», 18 эсминцев «Кагэро», 14 подлодок.',
+    id: 'maru3_start', title: '🔱 Программа Мару-3 (1937)',
+    description: '¥807 млн! 2 линкора «Ямато», 2 авианосца «Сёкаку», 18 эсминцев. Открывается верфь «Фудзинагата».',
     year: 1937,
     choices: [
-      { text: 'Полная реализация Мару-3 (+200 млн ¥)', budgetChange: 200 },
-      { text: 'Приоритет авианосцам над линкорами (+150 млн ¥)', budgetChange: 150 },
+      { text: 'Полная реализация (+200 млн ¥)', budgetChange: 200, unlockYard: 'fujinagata' },
+      { text: 'Приоритет авианосцам (+150 млн ¥)', budgetChange: 150, unlockYard: 'fujinagata' },
     ],
   },
   {
-    id: 'china_war',
-    title: '🇨🇳 Вторая японо-китайская война (1937)',
-    description: 'Инцидент на мосту Марко Поло. Флот поддерживает десантные операции. Нужны корабли для блокады побережья Китая.',
+    id: 'china_war', title: '🇨🇳 Японо-китайская война (1938)',
+    description: 'Нужны корабли для блокады побережья Китая.',
     year: 1938,
     choices: [
       { text: 'Экстренное финансирование (+200 млн ¥)', budgetChange: 200 },
@@ -353,59 +292,42 @@ const historicalEvents: GameEvent[] = [
     ],
   },
   {
-    id: 'maru4_start',
-    title: '⚡ Программа Мару-4 (1939)',
-    description: 'Новая программа: 80 кораблей на ¥1.6 млрд! 2 линкора «Ямато», авианосец «Тайхо», крейсеры «Агано», эсминцы «Югумо» и «Акидзуки».',
+    id: 'maru4_start', title: '⚡ Программа Мару-4 (1939)',
+    description: '80 кораблей на ¥1.6 млрд! «Тайхо», «Агано», «Югумо», «Акидзуки», «Симакадзэ».',
     year: 1939,
     choices: [
-      { text: 'Полная реализация (+300 млн ¥, +1 верфь)', budgetChange: 300, shipyardsChange: 1 },
+      { text: 'Полная реализация (+300 млн ¥)', budgetChange: 300 },
       { text: 'Ускоренное строительство (+200 млн ¥)', budgetChange: 200 },
     ],
   },
   {
-    id: 'carrier_doctrine',
-    title: '✈️ Кидё Бутай — Ударное соединение (1940)',
-    description: 'Адмирал Ямамото создаёт 1-й воздушный флот. 6 авианосцев в одном соединении — революция в морской войне!',
+    id: 'carrier_doctrine', title: '✈️ Кидё Бутай (1940)',
+    description: 'Ямамото создаёт 1-й воздушный флот. 6 авианосцев в одном соединении!',
     year: 1940,
     choices: [
-      { text: 'Поддержать — приоритет авианосцам (+150 млн ¥)', budgetChange: 150 },
-      { text: 'Сохранить баланс флота (+80 млн ¥)', budgetChange: 80 },
+      { text: 'Приоритет авианосцам (+150 млн ¥)', budgetChange: 150 },
+      { text: 'Сохранить баланс (+80 млн ¥)', budgetChange: 80 },
     ],
   },
   {
-    id: 'marurin_marukyuu',
-    title: '📋 Мару-Рин и Мару-Кю (1940-1941)',
-    description: 'Временная и экстренная программы. Массовое строительство эскортов, подлодок и эсминцев. «Унрю», «Ибуки», 30 «Эторофу».',
+    id: 'marurin_marukyuu', title: '📋 Мару-Рин и Мару-Кю (1941)',
+    description: 'Массовое строительство. «Унрю», «Ибуки», 30 «Эторофу».',
     year: 1941,
     choices: [
-      { text: 'Мобилизовать всё! (+300 млн ¥, +2 верфи)', budgetChange: 300, shipyardsChange: 2 },
-      { text: 'Фокус на авианосцы и эсминцы (+200 млн ¥)', budgetChange: 200 },
+      { text: 'Мобилизовать всё! (+300 млн ¥)', budgetChange: 300 },
+      { text: 'Фокус на авианосцы (+200 млн ¥)', budgetChange: 200 },
     ],
   },
 ];
 
 // ============ HELPERS ============
 function getTypeName(type: ShipType): string {
-  const names: Record<ShipType, string> = {
-    battleship: 'Линкор',
-    aircraft_carrier: 'Авианосец',
-    cruiser: 'Крейсер',
-    destroyer: 'Эсминец',
-    submarine: 'Подлодка',
-    auxiliary: 'Вспом.',
-  };
+  const names: Record<ShipType, string> = { battleship: 'Линкор', aircraft_carrier: 'Авианосец', cruiser: 'Крейсер', destroyer: 'Эсминец', submarine: 'Подлодка', auxiliary: 'Вспом.' };
   return names[type];
 }
 
 function getTypeIcon(type: ShipType): string {
-  const icons: Record<ShipType, string> = {
-    battleship: '⚓',
-    aircraft_carrier: '🛩️',
-    cruiser: '🚢',
-    destroyer: '🔹',
-    submarine: '🔻',
-    auxiliary: '🛡️',
-  };
+  const icons: Record<ShipType, string> = { battleship: '⚓', aircraft_carrier: '🛩️', cruiser: '🚢', destroyer: '🔹', submarine: '🔻', auxiliary: '🛡️' };
   return icons[type];
 }
 
@@ -413,21 +335,66 @@ function calculateScore(ships: BuiltShip[]): number {
   return ships.reduce((sum, s) => sum + s.firepower * 2 + s.speed + s.armor, 0);
 }
 
+// Найти свободный стапель на подходящей верфи для корабля
+function findAvailableSlipway(ship: Ship, shipyards: Shipyard[], buildingShips: BuildingEntry[]): { yard: Shipyard; slipway: Slipway } | null {
+  // Занятые стапели
+  const occupiedSlipways = new Set(buildingShips.map(b => b.builtOnSlipway));
+
+  // Приоритет: историческая верфь, затем по скорости
+  const availableYards = shipyards
+    .filter(y => y.available && y.availableFrom <= 1930) // базовая проверка
+    .sort((a, b) => {
+      // Сначала историческая верфь
+      if (a.id === ship.historicalYard) return -1;
+      if (b.id === ship.historicalYard) return 1;
+      // Затем по speed bonus
+      return b.speedBonus - a.speedBonus;
+    });
+
+  for (const yard of availableYards) {
+    for (const slipway of yard.slipways) {
+      if (slipway.length >= ship.length && !occupiedSlipways.has(slipway.id)) {
+        return { yard, slipway };
+      }
+    }
+  }
+  return null;
+}
+
+// Общее число свободных стапелей
+function countFreeSlipways(shipyards: Shipyard[], buildingShips: BuildingEntry[], year: number): number {
+  const occupiedSlipways = new Set(buildingShips.map(b => b.builtOnSlipway));
+  let count = 0;
+  for (const yard of shipyards) {
+    if (!yard.available || yard.availableFrom > year) continue;
+    for (const slipway of yard.slipways) {
+      if (!occupiedSlipways.has(slipway.id)) count++;
+    }
+  }
+  return count;
+}
+
+// Может ли корабль быть построен на какой-либо верфи
+function canBuildAnywhere(ship: Ship, shipyards: Shipyard[], buildingShips: BuildingEntry[], year: number): boolean {
+  const occupiedSlipways = new Set(buildingShips.map(b => b.builtOnSlipway));
+  for (const yard of shipyards) {
+    if (!yard.available || yard.availableFrom > year) continue;
+    for (const slipway of yard.slipways) {
+      if (slipway.length >= ship.length && !occupiedSlipways.has(slipway.id)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 const initialState: GameState = {
-  year: 1930,
-  month: 1,
-  budget: 247, // начальный бюджет Мару-1
-  shipyards: 4, // Курэ, Йокосука, Нагасаки, Сасебо
-  busyShipyards: 0,
-  builtShips: [],
-  buildingShips: [],
-  currentEvent: null,
-  gamePhase: 'menu',
-  score: 0,
-  treatyStatus: 'london',
-  log: [],
-  isPaused: false,
-  currentProgram: '—',
+  year: 1930, month: 1, budget: 247,
+  shipyards: JSON.parse(JSON.stringify(initialShipyards)),
+  builtShips: [], buildingShips: [],
+  currentEvent: null, gamePhase: 'menu',
+  score: 0, treatyStatus: 'london', log: [],
+  isPaused: false, currentProgram: '—',
 };
 
 // ============ MAIN COMPONENT ============
@@ -436,21 +403,22 @@ function App() {
   const [selectedType, setSelectedType] = useState<ShipType | 'all'>('all');
   const [selectedProgram, setSelectedProgram] = useState<string>('all');
   const [showLog, setShowLog] = useState(false);
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  const [showYardInfo, setShowYardInfo] = useState(false);
 
   // Game tick
   useEffect(() => {
     if (state.gamePhase !== 'playing' || state.isPaused) return;
-
     const timer = setInterval(() => {
       setState((prev) => {
         let newYear = prev.year;
         let newMonth = prev.month + 1;
-        if (newMonth > 12) {
-          newMonth = 1;
-          newYear++;
-        }
+        if (newMonth > 12) { newMonth = 1; newYear++; }
+
+        // Unlock yards by year
+        const updatedYards = prev.shipyards.map(y => ({
+          ...y,
+          available: y.available || (y.availableFrom <= newYear),
+        }));
 
         // Check completed ships
         const completed: BuiltShip[] = [];
@@ -458,11 +426,7 @@ function App() {
           const completedTime = b.completionYear * 12 + b.completionMonth;
           const currentTime = newYear * 12 + newMonth;
           if (currentTime >= completedTime) {
-            completed.push({
-              ...b.ship,
-              completionYear: b.completionYear,
-              completionMonth: b.completionMonth,
-            });
+            completed.push({ ...b.ship, completionYear: b.completionYear, completionMonth: b.completionMonth, builtAt: b.builtAt, builtOnSlipway: b.builtOnSlipway });
             return false;
           }
           return true;
@@ -470,21 +434,15 @@ function App() {
 
         const newLog = [...prev.log];
         completed.forEach((s) => {
-          newLog.push(`${newYear}/${String(newMonth).padStart(2, '0')}: ✅ Введён в строй — ${s.name} (${s.nameJp}) [${s.program}]`);
+          const yardName = updatedYards.find(y => y.id === s.builtAt)?.name || '?';
+          newLog.push(`${newYear}/${String(newMonth).padStart(2, '0')}: ✅ Введён в строй — ${s.name} (${yardName})`);
         });
 
-        // Game over
         if (newYear > 1941 || (newYear === 1942 && newMonth === 1)) {
           const score = calculateScore([...prev.builtShips, ...completed]);
-          return {
-            ...prev, year: newYear, month: newMonth,
-            builtShips: [...prev.builtShips, ...completed],
-            buildingShips: [], busyShipyards: 0,
-            gamePhase: 'gameover', score, log: newLog,
-          };
+          return { ...prev, year: newYear, month: newMonth, shipyards: updatedYards, builtShips: [...prev.builtShips, ...completed], buildingShips: [], gamePhase: 'gameover', score, log: newLog };
         }
 
-        // Annual budget
         let budgetChange = 0;
         if (newMonth === 1) {
           if (prev.treatyStatus === 'london') budgetChange = 40;
@@ -492,7 +450,6 @@ function App() {
           else budgetChange = 60;
         }
 
-        // Determine current program
         let currentProgram = '—';
         if (newYear >= 1931 && newYear < 1934) currentProgram = 'マル①';
         else if (newYear >= 1934 && newYear < 1937) currentProgram = 'マル②';
@@ -501,49 +458,36 @@ function App() {
         else if (newYear >= 1940 && newYear < 1941) currentProgram = 'マル凛';
         else if (newYear >= 1941) currentProgram = 'マル級';
 
-        // Check for events
         const event = historicalEvents.find((e) => e.year === newYear && newMonth === 1);
-
         if (event) {
-          return {
-            ...prev, year: newYear, month: newMonth,
-            budget: prev.budget + budgetChange,
-            builtShips: [...prev.builtShips, ...completed],
-            buildingShips: stillBuilding, busyShipyards: stillBuilding.length,
-            currentEvent: event, gamePhase: 'event',
-            currentProgram, log: newLog,
-          };
+          return { ...prev, year: newYear, month: newMonth, shipyards: updatedYards, budget: prev.budget + budgetChange, builtShips: [...prev.builtShips, ...completed], buildingShips: stillBuilding, currentEvent: event, gamePhase: 'event', currentProgram, log: newLog };
         }
 
-        return {
-          ...prev, year: newYear, month: newMonth,
-          budget: prev.budget + budgetChange,
-          builtShips: [...prev.builtShips, ...completed],
-          buildingShips: stillBuilding, busyShipyards: stillBuilding.length,
-          currentProgram, log: newLog,
-        };
+        return { ...prev, year: newYear, month: newMonth, shipyards: updatedYards, budget: prev.budget + budgetChange, builtShips: [...prev.builtShips, ...completed], buildingShips: stillBuilding, currentProgram, log: newLog };
       });
     }, 1500);
-
     return () => clearInterval(timer);
   }, [state.gamePhase, state.isPaused]);
 
   function startBuilding(ship: Ship) {
     setState((prev) => {
       if (prev.budget < ship.cost) return prev;
-      if (prev.busyShipyards >= prev.shipyards) return prev;
       if (prev.year < ship.yearAvailable) return prev;
 
-      const totalMonths = prev.month + ship.buildTime;
+      const assignment = findAvailableSlipway(ship, prev.shipyards, prev.buildingShips);
+      if (!assignment) return prev;
+
+      // Speed bonus affects build time
+      const actualBuildTime = Math.round(ship.buildTime / assignment.yard.speedBonus);
+      const totalMonths = prev.month + actualBuildTime;
       const completionYear = prev.year + Math.floor((totalMonths - 1) / 12);
       const completionMonth = ((totalMonths - 1) % 12) + 1;
 
       return {
         ...prev,
         budget: prev.budget - ship.cost,
-        busyShipyards: prev.busyShipyards + 1,
-        buildingShips: [...prev.buildingShips, { ship, completionYear, completionMonth }],
-        log: [...prev.log, `${prev.year}/${String(prev.month).padStart(2, '0')}: 🔨 Заложен — ${ship.name} (${ship.nameJp}) [${ship.program}]`],
+        buildingShips: [...prev.buildingShips, { ship, completionYear, completionMonth, builtAt: assignment.yard.id, builtOnSlipway: assignment.slipway.id }],
+        log: [...prev.log, `${prev.year}/${String(prev.month).padStart(2, '0')}: 🔨 Заложен — ${ship.name} на верфи «${assignment.yard.name}» (${assignment.slipway.length}м стапель)`],
       };
     });
   }
@@ -552,8 +496,18 @@ function App() {
     setState((prev) => {
       const newState = { ...prev };
       newState.budget = prev.budget + choice.budgetChange;
-      if (choice.shipyardsChange) newState.shipyards = prev.shipyards + choice.shipyardsChange;
       if (choice.treatyStatus) newState.treatyStatus = choice.treatyStatus;
+      if (choice.unlockYard) {
+        newState.shipyards = prev.shipyards.map(y => y.id === choice.unlockYard ? { ...y, available: true } : y);
+      }
+      if (choice.expandSlipway) {
+        newState.shipyards = prev.shipyards.map(y => {
+          if (y.id !== choice.expandSlipway!.yardId) return y;
+          const newSlipways = [...y.slipways];
+          newSlipways[choice.expandSlipway!.slipwayIdx] = { ...newSlipways[choice.expandSlipway!.slipwayIdx], length: choice.expandSlipway!.newLength, expanded: true };
+          return { ...y, slipways: newSlipways };
+        });
+      }
       newState.currentEvent = null;
       newState.gamePhase = 'playing';
       newState.log = [...prev.log, `${prev.year}: 📋 ${prev.currentEvent?.title} → ${choice.text}`];
@@ -562,23 +516,16 @@ function App() {
   }
 
   function startGame() {
-    setState({
-      ...initialState,
-      gamePhase: 'playing',
-      log: ['1930/01: 🇯🇵 Начало реализации программы Мару-1 (第一次補充計画)'],
-      currentProgram: 'マル①',
-    });
+    setState({ ...initialState, shipyards: JSON.parse(JSON.stringify(initialShipyards)), gamePhase: 'playing', log: ['1930/01: 🇯🇵 Начало программы Мару-1. Доступны: Курэ, Йокосука, Сасебо, Майдзуру.'], currentProgram: 'マル①' });
   }
 
-  function togglePause() {
-    setState(prev => ({ ...prev, isPaused: !prev.isPaused }));
-  }
+  function togglePause() { setState(prev => ({ ...prev, isPaused: !prev.isPaused })); }
 
   const currentScore = calculateScore(state.builtShips);
   const progressPercent = ((state.year - 1930) * 12 + state.month) / (12 * 12) * 100;
-
-  // Get unique programs
   const programs = ['all', 'マル①', 'マル②', 'マル③', 'マル④', 'マル凛', 'マル級'];
+  const freeSlipways = countFreeSlipways(state.shipyards, state.buildingShips, state.year);
+  const totalSlipways = state.shipyards.filter(y => y.available && y.availableFrom <= state.year).reduce((s, y) => s + y.slipways.length, 0);
 
   const availableShips = shipTemplates.filter((s) => {
     if (selectedType !== 'all' && s.type !== selectedType) return false;
@@ -586,67 +533,55 @@ function App() {
     return true;
   });
 
-  // ============ MENU SCREEN ============
+  // ============ MENU ============
   if (state.gamePhase === 'menu') {
     return (
       <div className="min-h-screen bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
         <div className="max-w-3xl w-full text-center">
-          <div className="mb-8">
+          <div className="mb-6">
             <div className="text-7xl mb-4">⚓</div>
-            <h1 className="text-4xl md:text-5xl font-bold text-amber-400 mb-2" style={{ fontFamily: 'serif' }}>
-              日本海軍造船計画
-            </h1>
-            <h2 className="text-2xl md:text-3xl text-amber-200 mb-2" style={{ fontFamily: 'serif' }}>
-              Кораблестроительная программа Японии
-            </h2>
-            <p className="text-slate-400 text-lg">Основано на реальных программах Мару-1 — Мару-Кю (1930–1941)</p>
+            <h1 className="text-4xl md:text-5xl font-bold text-amber-400 mb-2" style={{ fontFamily: 'serif' }}>日本海軍造船計画</h1>
+            <h2 className="text-2xl text-amber-200 mb-2" style={{ fontFamily: 'serif' }}>Кораблестроительная программа Японии</h2>
+            <p className="text-slate-400">Реальная система верфей и стапелей • 1930–1941</p>
           </div>
 
-          <div className="bg-slate-800/80 border border-amber-900/50 rounded-lg p-6 mb-6 text-left">
-            <h3 className="text-amber-400 font-bold text-lg mb-3">📋 Историческая справка:</h3>
-            <p className="text-slate-300 mb-4">
-              Императорский флот Японии реализовал серию кораблестроительных программ (丸計画 / Мару кэйкаку):
-            </p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-              <div className="bg-slate-700/50 p-2 rounded">
-                <span className="text-amber-400 font-bold">マル① (1931)</span> — ¥247 млн<br/>
-                <span className="text-slate-400">4 «Могами», 12 «Хатсухару», 13 ПЛ</span>
-              </div>
-              <div className="bg-slate-700/50 p-2 rounded">
-                <span className="text-amber-400 font-bold">マル② (1934)</span> — ¥432 млн<br/>
-                <span className="text-slate-400">2 «Тоне», 2 «Сорю», 14 эсминцев</span>
-              </div>
-              <div className="bg-slate-700/50 p-2 rounded">
-                <span className="text-amber-400 font-bold">マル③ (1937)</span> — ¥807 млн<br/>
-                <span className="text-slate-400">2 «Ямато», 2 «Сёкаку», 18 «Кагэро»</span>
-              </div>
-              <div className="bg-slate-700/50 p-2 rounded">
-                <span className="text-amber-400 font-bold">マル④ (1939)</span> — ¥1.6 млрд<br/>
-                <span className="text-slate-400">«Синано», «Тайхо», «Агано», «Югумо»</span>
-              </div>
-              <div className="bg-slate-700/50 p-2 rounded">
-                <span className="text-amber-400 font-bold">マル凛 (1940)</span><br/>
-                <span className="text-slate-400">18 средних ПЛ, охотники</span>
-              </div>
-              <div className="bg-slate-700/50 p-2 rounded">
-                <span className="text-amber-400 font-bold">マル級 (1941)</span><br/>
-                <span className="text-slate-400">«Унрю», «Ибуки», 30 «Эторофу»</span>
-              </div>
+          <div className="bg-slate-800/80 border border-amber-900/50 rounded-lg p-5 mb-4 text-left">
+            <h3 className="text-amber-400 font-bold mb-3">🏗️ Система верфей (реальные данные):</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+              {initialShipyards.filter(y => y.type === 'naval').map(yard => (
+                <div key={yard.id} className="bg-slate-700/50 p-2 rounded border border-blue-900/30">
+                  <div className="font-bold text-blue-300">⚓ {yard.name} <span className="text-amber-600">{yard.nameJp}</span></div>
+                  <div className="text-slate-400 mt-1">
+                    {yard.slipways.length} стапелей • макс. {Math.max(...yard.slipways.map(s => s.length))}м
+                  </div>
+                  <div className="text-slate-500 text-[10px] mt-0.5">{yard.historicalNote}</div>
+                </div>
+              ))}
+              {initialShipyards.filter(y => y.type === 'civilian').map(yard => (
+                <div key={yard.id} className="bg-slate-700/50 p-2 rounded border border-green-900/30 opacity-70">
+                  <div className="font-bold text-green-300">🏭 {yard.name} <span className="text-amber-600">{yard.nameJp}</span></div>
+                  <div className="text-slate-400 mt-1">
+                    {yard.slipways.length} стапелей • макс. {Math.max(...yard.slipways.map(s => s.length))}м
+                  </div>
+                  <div className="text-slate-500 text-[10px] mt-0.5">Откр. в {yard.availableFrom} • {yard.historicalNote}</div>
+                </div>
+              ))}
             </div>
           </div>
 
-          <div className="bg-slate-800/80 border border-red-900/50 rounded-lg p-4 mb-8 text-left">
-            <h3 className="text-red-400 font-bold text-lg mb-2">⚔️ Задание:</h3>
-            <p className="text-slate-300">
-              Вы — руководитель Морского министерства. За 11 лет постройте сильнейший флот к декабрю 1941.
-              Управляйте бюджетом, верфями, реагируйте на исторические события.
-            </p>
+          <div className="bg-slate-800/80 border border-amber-900/50 rounded-lg p-4 mb-6 text-left text-sm">
+            <h3 className="text-amber-400 font-bold mb-2">📏 Длина кораблей vs стапели:</h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-1 text-xs text-slate-400">
+              <div>⚓ Линкор: <span className="text-red-400">266м</span> → стапель 300м</div>
+              <div>🛩️ Авианосец: <span className="text-blue-400">242м</span> → стапель 250м+</div>
+              <div>🚢 Крейсер: <span className="text-green-400">201м</span> → стапель 200м+</div>
+              <div>🔹 Эсминец: <span className="text-yellow-400">118м</span> → стапель 125м+</div>
+              <div>🔻 Подлодка: <span className="text-purple-400">109м</span> → стапель 125м+</div>
+              <div>🛡️ Вспом.: <span className="text-slate-400">80-87м</span> → стапель 100м+</div>
+            </div>
           </div>
 
-          <button
-            onClick={startGame}
-            className="bg-gradient-to-r from-red-800 to-red-600 hover:from-red-700 hover:to-red-500 text-white font-bold py-4 px-12 rounded-lg text-xl transition-all transform hover:scale-105 shadow-lg shadow-red-900/50 cursor-pointer"
-          >
+          <button onClick={startGame} className="bg-gradient-to-r from-red-800 to-red-600 hover:from-red-700 hover:to-red-500 text-white font-bold py-4 px-12 rounded-lg text-xl transition-all transform hover:scale-105 shadow-lg shadow-red-900/50 cursor-pointer">
             🏯 Начать программу Мару-1
           </button>
         </div>
@@ -654,19 +589,15 @@ function App() {
     );
   }
 
-  // ============ GAME OVER SCREEN ============
+  // ============ GAME OVER ============
   if (state.gamePhase === 'gameover') {
     const battleships = state.builtShips.filter(s => s.type === 'battleship').length;
     const carriers = state.builtShips.filter(s => s.type === 'aircraft_carrier').length;
     const cruisers = state.builtShips.filter(s => s.type === 'cruiser').length;
     const destroyers = state.builtShips.filter(s => s.type === 'destroyer').length;
     const subs = state.builtShips.filter(s => s.type === 'submarine').length;
-    const totalFirepower = state.builtShips.reduce((s, sh) => s + sh.firepower, 0);
-    const totalDisplacement = state.builtShips.reduce((s, sh) => s + (sh.displacement || 0), 0);
 
-    let rank = 'D';
-    let rankColor = 'text-slate-400';
-    let rankDesc = 'Флот слишком слаб';
+    let rank = 'D', rankColor = 'text-slate-400', rankDesc = 'Флот слишком слаб';
     if (currentScore > 1000) { rank = 'S'; rankColor = 'text-amber-400'; rankDesc = 'Величайший флот в истории!'; }
     else if (currentScore > 750) { rank = 'A'; rankColor = 'text-green-400'; rankDesc = 'Превосходный флот'; }
     else if (currentScore > 500) { rank = 'B'; rankColor = 'text-blue-400'; rankDesc = 'Сильный флот'; }
@@ -677,93 +608,43 @@ function App() {
         <div className="max-w-2xl w-full text-center">
           <div className="text-6xl mb-4">🏴</div>
           <h1 className="text-4xl font-bold text-red-400 mb-2">7 декабря 1941</h1>
-          <h2 className="text-2xl text-amber-300 mb-6">Итоги кораблестроительных программ</h2>
-
-          <div className="bg-slate-800/80 border border-amber-900/50 rounded-lg p-6 mb-6">
+          <h2 className="text-xl text-amber-300 mb-4">Итоги кораблестроительных программ</h2>
+          <div className="bg-slate-800/80 border border-amber-900/50 rounded-lg p-5 mb-4">
             <div className={`text-6xl font-bold mb-1 ${rankColor}`}>Ранг: {rank}</div>
-            <div className="text-lg text-slate-400 mb-2">{rankDesc}</div>
-            <div className="text-2xl text-slate-300 mb-4">Очки: {currentScore}</div>
-
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-4 text-left">
-              <div className="bg-slate-700/50 p-3 rounded">
-                <div className="text-amber-400 font-bold text-sm">Всего кораблей</div>
-                <div className="text-2xl text-white">{state.builtShips.length}</div>
-              </div>
-              <div className="bg-slate-700/50 p-3 rounded">
-                <div className="text-amber-400 font-bold text-sm">Огневая мощь</div>
-                <div className="text-2xl text-white">{totalFirepower}</div>
-              </div>
-              <div className="bg-slate-700/50 p-3 rounded">
-                <div className="text-amber-400 font-bold text-sm">Водоизмещение</div>
-                <div className="text-2xl text-white">{(totalDisplacement / 1000).toFixed(0)}к т</div>
-              </div>
-              <div className="bg-slate-700/50 p-3 rounded">
-                <div className="text-red-400 font-bold text-sm">⚓ Линкоры</div>
-                <div className="text-2xl text-white">{battleships}</div>
-              </div>
-              <div className="bg-slate-700/50 p-3 rounded">
-                <div className="text-blue-400 font-bold text-sm">🛩️ Авианосцы</div>
-                <div className="text-2xl text-white">{carriers}</div>
-              </div>
-              <div className="bg-slate-700/50 p-3 rounded">
-                <div className="text-green-400 font-bold text-sm">🚢 Крейсеры</div>
-                <div className="text-2xl text-white">{cruisers}</div>
-              </div>
-              <div className="bg-slate-700/50 p-3 rounded">
-                <div className="text-yellow-400 font-bold text-sm">🔹 Эсминцы</div>
-                <div className="text-2xl text-white">{destroyers}</div>
-              </div>
-              <div className="bg-slate-700/50 p-3 rounded">
-                <div className="text-purple-400 font-bold text-sm">🔻 Подлодки</div>
-                <div className="text-2xl text-white">{subs}</div>
-              </div>
+            <div className="text-sm text-slate-400 mb-3">{rankDesc}</div>
+            <div className="text-xl text-slate-300 mb-3">Очки: {currentScore}</div>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-left text-sm">
+              <div className="bg-slate-700/50 p-2 rounded"><div className="text-amber-400 font-bold text-xs">Всего</div><div className="text-xl">{state.builtShips.length}</div></div>
+              <div className="bg-slate-700/50 p-2 rounded"><div className="text-red-400 font-bold text-xs">⚓ Линкоры</div><div className="text-xl">{battleships}</div></div>
+              <div className="bg-slate-700/50 p-2 rounded"><div className="text-blue-400 font-bold text-xs">🛩️ Авианосцы</div><div className="text-xl">{carriers}</div></div>
+              <div className="bg-slate-700/50 p-2 rounded"><div className="text-green-400 font-bold text-xs">🚢 Крейсеры</div><div className="text-xl">{cruisers}</div></div>
+              <div className="bg-slate-700/50 p-2 rounded"><div className="text-yellow-400 font-bold text-xs">🔹 Эсминцы</div><div className="text-xl">{destroyers}</div></div>
+              <div className="bg-slate-700/50 p-2 rounded"><div className="text-purple-400 font-bold text-xs">🔻 Подлодки</div><div className="text-xl">{subs}</div></div>
             </div>
           </div>
-
-          {carriers >= 6 && (
-            <div className="bg-blue-900/30 border border-blue-700/50 rounded-lg p-3 mb-3">
-              <p className="text-blue-300 text-sm">✈️ Кидё Бутай готов! 6+ авианосцев — ударная мощь Тихого океана!</p>
-            </div>
-          )}
-          {battleships >= 2 && (
-            <div className="bg-red-900/30 border border-red-700/50 rounded-lg p-3 mb-3">
-              <p className="text-red-300 text-sm">⚓ Линкоры «Ямато» и «Мусаси» — сильнейшие корабли мира!</p>
-            </div>
-          )}
-          {destroyers >= 20 && (
-            <div className="bg-yellow-900/30 border border-yellow-700/50 rounded-lg p-3 mb-3">
-              <p className="text-yellow-300 text-sm">🔹 Мощный экран из эсминцев с торпедами «Длинное копьё»!</p>
-            </div>
-          )}
-
-          <button
-            onClick={() => setState({ ...initialState, gamePhase: 'menu' })}
-            className="bg-gradient-to-r from-amber-800 to-amber-600 hover:from-amber-700 hover:to-amber-500 text-white font-bold py-3 px-8 rounded-lg text-lg transition-all transform hover:scale-105 cursor-pointer"
-          >
-            🔄 Начать заново
-          </button>
+          {carriers >= 6 && <div className="bg-blue-900/30 border border-blue-700/50 rounded-lg p-2 mb-2 text-blue-300 text-sm">✈️ Кидё Бутай — 6+ авианосцев!</div>}
+          {battleships >= 2 && <div className="bg-red-900/30 border border-red-700/50 rounded-lg p-2 mb-2 text-red-300 text-sm">⚓ «Ямато» и «Мусаси» — сильнейшие корабли мира!</div>}
+          <button onClick={() => setState({ ...initialState, gamePhase: 'menu' })} className="bg-gradient-to-r from-amber-800 to-amber-600 hover:from-amber-700 hover:to-amber-500 text-white font-bold py-3 px-8 rounded-lg text-lg cursor-pointer">🔄 Начать заново</button>
         </div>
       </div>
     );
   }
 
-  // ============ EVENT SCREEN ============
+  // ============ EVENT ============
   if (state.gamePhase === 'event' && state.currentEvent) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4">
         <div className="max-w-xl w-full">
-          <div className="bg-slate-800/90 border-2 border-amber-700/70 rounded-xl p-8 shadow-2xl">
-            <div className="text-sm text-amber-600 mb-2">{state.year} год</div>
-            <h2 className="text-2xl font-bold text-amber-400 mb-4">{state.currentEvent.title}</h2>
-            <p className="text-slate-300 mb-6 text-lg leading-relaxed">{state.currentEvent.description}</p>
-            <div className="space-y-3">
+          <div className="bg-slate-800/90 border-2 border-amber-700/70 rounded-xl p-6 shadow-2xl">
+            <div className="text-xs text-amber-600 mb-1">{state.year} год</div>
+            <h2 className="text-xl font-bold text-amber-400 mb-3">{state.currentEvent.title}</h2>
+            <p className="text-slate-300 mb-4 leading-relaxed">{state.currentEvent.description}</p>
+            <div className="space-y-2">
               {state.currentEvent.choices.map((choice, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => handleEventChoice(choice)}
-                  className="w-full bg-slate-700/80 hover:bg-slate-600/80 border border-slate-600 hover:border-amber-600 text-slate-200 py-3 px-4 rounded-lg text-left transition-all cursor-pointer"
-                >
+                <button key={idx} onClick={() => handleEventChoice(choice)} className="w-full bg-slate-700/80 hover:bg-slate-600/80 border border-slate-600 hover:border-amber-600 text-slate-200 py-2.5 px-3 rounded-lg text-left text-sm transition-all cursor-pointer">
                   {choice.text}
+                  {choice.unlockYard && <span className="text-green-400 text-xs ml-2">🏭 Новая верфь!</span>}
+                  {choice.expandSlipway && <span className="text-blue-400 text-xs ml-2">📏 Расширение стапеля!</span>}
                 </button>
               ))}
             </div>
@@ -773,115 +654,105 @@ function App() {
     );
   }
 
-  // ============ MAIN GAME SCREEN ============
+  // ============ MAIN GAME ============
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-900 via-slate-800 to-slate-900 text-white">
       {/* Top bar */}
-      <div className="bg-slate-900/90 border-b border-amber-900/50 px-4 py-3 sticky top-0 z-10 backdrop-blur-sm">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
+      <div className="bg-slate-900/90 border-b border-amber-900/50 px-3 py-2 sticky top-0 z-10 backdrop-blur-sm">
+        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-amber-400 font-bold">🇯🇵</span>
-            <span className="bg-slate-700 px-2 py-1 rounded text-amber-300 font-mono text-sm">
-              📅 {state.year}/{String(state.month).padStart(2, '0')}
-            </span>
-            <span className="bg-slate-700 px-2 py-1 rounded text-green-400 font-mono text-sm">
-              💰 {state.budget} млн¥
-            </span>
-            <span className="bg-slate-700 px-2 py-1 rounded text-blue-400 font-mono text-sm">
-              🏗️ {state.shipyards - state.busyShipyards}/{state.shipyards}
-            </span>
-            <span className="bg-amber-900/50 px-2 py-1 rounded text-amber-300 text-sm font-bold">
-              {state.currentProgram}
-            </span>
-            <button
-              onClick={togglePause}
-              className={`px-2 py-1 rounded text-xs font-bold cursor-pointer transition-colors ${
-                state.isPaused ? 'bg-green-700 hover:bg-green-600 text-white' : 'bg-yellow-700 hover:bg-yellow-600 text-white'
-              }`}
-            >
+            <span className="text-amber-400 font-bold text-sm">🇯🇵</span>
+            <span className="bg-slate-700 px-2 py-0.5 rounded text-amber-300 font-mono text-xs">📅 {state.year}/{String(state.month).padStart(2, '0')}</span>
+            <span className="bg-slate-700 px-2 py-0.5 rounded text-green-400 font-mono text-xs">💰 {state.budget} млн¥</span>
+            <span className="bg-slate-700 px-2 py-0.5 rounded text-blue-400 font-mono text-xs">🏗️ {freeSlipways}/{totalSlipways} стапелей</span>
+            <span className="bg-amber-900/50 px-2 py-0.5 rounded text-amber-300 text-xs font-bold">{state.currentProgram}</span>
+            <button onClick={togglePause} className={`px-2 py-0.5 rounded text-xs font-bold cursor-pointer ${state.isPaused ? 'bg-green-700 text-white' : 'bg-yellow-700 text-white'}`}>
               {state.isPaused ? '▶' : '⏸'}
             </button>
+            <button onClick={() => setShowYardInfo(!showYardInfo)} className="bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded text-xs cursor-pointer">🏭 Верфи</button>
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-amber-400 font-bold text-sm">⭐ {currentScore}</span>
-            <button onClick={() => setShowLog(!showLog)} className="bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-xs cursor-pointer">
-              📜
-            </button>
+            <span className="text-amber-400 font-bold text-xs">⭐ {currentScore}</span>
+            <button onClick={() => setShowLog(!showLog)} className="bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded text-xs cursor-pointer">📜</button>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto p-4">
-        {/* Progress bar */}
-        <div className="mb-4">
-          <div className="flex justify-between text-xs text-slate-400 mb-1">
-            <span>1930</span>
-            <span className="text-amber-400">Прогресс ({Math.round(progressPercent)}%)</span>
-            <span>1942</span>
+      <div className="max-w-7xl mx-auto p-3">
+        {/* Progress */}
+        <div className="mb-3">
+          <div className="flex justify-between text-xs text-slate-400 mb-0.5">
+            <span>1930</span><span className="text-amber-400">{Math.round(progressPercent)}%</span><span>1942</span>
           </div>
           <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-            <div className="h-full bg-gradient-to-r from-amber-600 to-red-600 transition-all duration-500"
-              style={{ width: `${Math.min(100, progressPercent)}%` }} />
+            <div className="h-full bg-gradient-to-r from-amber-600 to-red-600 transition-all duration-500" style={{ width: `${Math.min(100, progressPercent)}%` }} />
           </div>
         </div>
 
-        {/* Shipyard visualization with construction animation */}
-        <div className="mb-4">
-          <ShipyardView
-            buildingShips={state.buildingShips}
-            currentYear={state.year}
-            currentMonth={state.month}
-            shipyards={state.shipyards}
-          />
-        </div>
+        {/* Yard info panel */}
+        {showYardInfo && (
+          <div className="mb-3 bg-slate-800/80 border border-slate-700 rounded-xl p-3">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="text-sm font-bold text-amber-400">🏭 Верфи и стапели</h3>
+              <button onClick={() => setShowYardInfo(false)} className="text-slate-400 hover:text-white text-xs cursor-pointer">✕</button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2 max-h-80 overflow-y-auto">
+              {state.shipyards.filter(y => y.available && y.availableFrom <= state.year).map(yard => {
+                const occupiedSlipways = new Set(state.buildingShips.filter(b => b.builtAt === yard.id).map(b => b.builtOnSlipway));
+                return (
+                  <div key={yard.id} className={`p-2 rounded text-xs border ${yard.type === 'naval' ? 'bg-blue-900/20 border-blue-800/30' : 'bg-green-900/20 border-green-800/30'}`}>
+                    <div className="font-bold text-white mb-0.5">
+                      {yard.type === 'naval' ? '⚓' : '🏭'} {yard.name} <span className="text-amber-600 text-[10px]">{yard.nameJp}</span>
+                    </div>
+                    <div className="text-slate-500 text-[10px] mb-1">×{yard.speedBonus} скорость • {yard.historicalNote}</div>
+                    {yard.slipways.map((s, i) => {
+                      const isOccupied = occupiedSlipways.has(s.id);
+                      const building = state.buildingShips.find(b => b.builtOnSlipway === s.id);
+                      return (
+                        <div key={i} className={`flex justify-between items-center py-0.5 px-1 rounded mb-0.5 ${isOccupied ? 'bg-red-900/30' : 'bg-green-900/20'}`}>
+                          <span className="text-slate-400">{s.label}</span>
+                          <div className="text-right">
+                            <span className={`${s.expanded ? 'text-blue-400' : 'text-amber-500'}`}>{s.length}м</span>
+                            {isOccupied && building && <span className="text-[9px] text-red-300 ml-1">({building.ship.name})</span>}
+                            {!isOccupied && <span className="text-[9px] text-green-400 ml-1">✓</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-2 text-[10px] text-slate-500 border-t border-slate-700 pt-1">
+              <strong>Длина кораблей:</strong> ⚓ Линкор 266м • 🛩️ АВ 227-262м • 🚢 Крейсер 174-201м • 🔹 Эсминец 103-134м • 🔻 ПЛ 76-109м
+            </div>
+          </div>
+        )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
           {/* Ship catalog */}
           <div className="lg:col-span-2">
-            <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-4">
-              <h2 className="text-lg font-bold text-amber-400 mb-3">🚢 Корабли для строительства</h2>
-
-              {/* Type filter */}
+            <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-3">
+              <h2 className="text-sm font-bold text-amber-400 mb-2">🚢 Корабли для строительства</h2>
+              <div className="flex flex-wrap gap-1 mb-1">
+                {([{ key: 'all', label: 'Все' }, { key: 'battleship', label: '⚓Линк' }, { key: 'aircraft_carrier', label: '🛩️АВ' }, { key: 'cruiser', label: '🚢Кр' }, { key: 'destroyer', label: '🔹ЭС' }, { key: 'submarine', label: '🔻ПЛ' }, { key: 'auxiliary', label: '🛡️Всп' }] as const).map(tab => (
+                  <button key={tab.key} onClick={() => setSelectedType(tab.key)} className={`px-2 py-0.5 rounded text-xs cursor-pointer ${selectedType === tab.key ? 'bg-amber-700 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}>{tab.label}</button>
+                ))}
+              </div>
               <div className="flex flex-wrap gap-1 mb-2">
-                {([
-                  { key: 'all', label: 'Все' },
-                  { key: 'battleship', label: '⚓Линк' },
-                  { key: 'aircraft_carrier', label: '🛩️АВ' },
-                  { key: 'cruiser', label: '🚢Кр' },
-                  { key: 'destroyer', label: '🔹ЭС' },
-                  { key: 'submarine', label: '🔻ПЛ' },
-                  { key: 'auxiliary', label: '🛡️Всп' },
-                ] as const).map((tab) => (
-                  <button key={tab.key} onClick={() => setSelectedType(tab.key)}
-                    className={`px-2 py-1 rounded text-xs transition-all cursor-pointer ${
-                      selectedType === tab.key ? 'bg-amber-700 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-                    }`}>{tab.label}</button>
+                {programs.map(prog => (
+                  <button key={prog} onClick={() => setSelectedProgram(prog)} className={`px-2 py-0.5 rounded text-xs cursor-pointer ${selectedProgram === prog ? 'bg-red-800 text-white' : 'bg-slate-700/60 text-slate-400 hover:bg-slate-600'}`}>{prog === 'all' ? 'Все программы' : prog}</button>
                 ))}
               </div>
 
-              {/* Program filter */}
-              <div className="flex flex-wrap gap-1 mb-3">
-                {programs.map((prog) => (
-                  <button key={prog} onClick={() => setSelectedProgram(prog)}
-                    className={`px-2 py-1 rounded text-xs transition-all cursor-pointer ${
-                      selectedProgram === prog ? 'bg-red-800 text-white' : 'bg-slate-700/60 text-slate-400 hover:bg-slate-600'
-                    }`}>{prog === 'all' ? 'Все программы' : prog}</button>
-                ))}
-              </div>
-
-              {/* Ship list */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-[55vh] overflow-y-auto pr-1">
-                {availableShips.map((ship) => {
-                  const canBuild = state.budget >= ship.cost && state.busyShipyards < state.shipyards && state.year >= ship.yearAvailable;
+                {availableShips.map(ship => {
                   const locked = state.year < ship.yearAvailable;
+                  const canBuild = !locked && state.budget >= ship.cost && canBuildAnywhere(ship, state.shipyards, state.buildingShips, state.year);
+                  const noSlipway = !locked && state.budget >= ship.cost && !canBuildAnywhere(ship, state.shipyards, state.buildingShips, state.year);
 
                   return (
-                    <div key={ship.id}
-                      className={`border rounded-lg p-2.5 transition-all ${
-                        locked ? 'bg-slate-800/40 border-slate-700 opacity-50'
-                          : canBuild ? 'bg-slate-700/60 border-slate-600 hover:border-amber-600'
-                            : 'bg-slate-800/40 border-slate-700'
-                      }`}>
+                    <div key={ship.id} className={`border rounded-lg p-2 transition-all ${locked ? 'bg-slate-800/40 border-slate-700 opacity-50' : canBuild ? 'bg-slate-700/60 border-slate-600 hover:border-amber-600' : 'bg-slate-800/40 border-slate-700'}`}>
                       <div className="flex items-start justify-between mb-1">
                         <div>
                           <span className="mr-1">{ship.icon}</span>
@@ -893,24 +764,26 @@ function App() {
                           {!locked && <span className="text-xs text-slate-500">{ship.program}</span>}
                         </div>
                       </div>
-                      <p className="text-xs text-slate-400 mb-1.5">{ship.description}</p>
-                      <div className="flex flex-wrap gap-1 text-xs mb-1.5">
-                        <span className="bg-red-900/40 text-red-300 px-1.5 py-0.5 rounded">⚔️{ship.firepower}</span>
-                        <span className="bg-blue-900/40 text-blue-300 px-1.5 py-0.5 rounded">💨{ship.speed}уз</span>
-                        <span className="bg-green-900/40 text-green-300 px-1.5 py-0.5 rounded">🛡️{ship.armor}</span>
-                        {ship.displacement && (
-                          <span className="bg-slate-600/40 text-slate-300 px-1.5 py-0.5 rounded">{(ship.displacement / 1000).toFixed(1)}к т</span>
-                        )}
+                      <p className="text-[11px] text-slate-400 mb-1">{ship.description}</p>
+                      <div className="flex flex-wrap gap-1 text-[10px] mb-1">
+                        <span className="bg-red-900/40 text-red-300 px-1 py-0.5 rounded">⚔️{ship.firepower}</span>
+                        <span className="bg-blue-900/40 text-blue-300 px-1 py-0.5 rounded">💨{ship.speed}уз</span>
+                        <span className="bg-green-900/40 text-green-300 px-1 py-0.5 rounded">🛡️{ship.armor}</span>
+                        <span className="bg-slate-600/40 text-slate-300 px-1 py-0.5 rounded">📏{ship.length}м</span>
                       </div>
                       <div className="flex items-center justify-between">
-                        <span className="text-xs text-amber-400">💰{ship.cost} | ⏱️{ship.buildTime}мес</span>
+                        <span className="text-[10px] text-amber-400">💰{ship.cost} | ⏱️{ship.buildTime}мес</span>
                         {!locked && (
-                          <button onClick={() => startBuilding(ship)} disabled={!canBuild}
-                            className={`px-2 py-0.5 rounded text-xs font-bold transition-all ${
-                              canBuild ? 'bg-amber-700 hover:bg-amber-600 text-white cursor-pointer' : 'bg-slate-700 text-slate-500 cursor-not-allowed'
-                            }`}>🔨 Заложить</button>
+                          <button onClick={() => startBuilding(ship)} disabled={!canBuild} className={`px-2 py-0.5 rounded text-xs font-bold cursor-pointer ${canBuild ? 'bg-amber-700 hover:bg-amber-600 text-white' : 'bg-slate-700 text-slate-500 cursor-not-allowed'}`}>
+                            {noSlipway ? '🚫 Нет стапеля' : '🔨 Заложить'}
+                          </button>
                         )}
                       </div>
+                      {ship.historicalYard && !locked && (
+                        <div className="text-[9px] text-slate-600 mt-0.5">
+                          📍 Истор.: {initialShipyards.find(y => y.id === ship.historicalYard)?.name}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -919,10 +792,10 @@ function App() {
           </div>
 
           {/* Side panel */}
-          <div className="space-y-3">
-            {/* Building queue */}
+          <div className="space-y-2">
+            {/* Building queue by yard */}
             <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-3">
-              <h3 className="text-sm font-bold text-amber-400 mb-2">🔨 На стапелях ({state.buildingShips.length})</h3>
+              <h3 className="text-sm font-bold text-amber-400 mb-2">🔨 Строительство ({state.buildingShips.length})</h3>
               {state.buildingShips.length === 0 ? (
                 <p className="text-slate-500 text-xs italic">Пусто</p>
               ) : (
@@ -932,15 +805,21 @@ function App() {
                     const startTotal = (b.completionYear * 12 + b.completionMonth) - totalMonths;
                     const currentTotal = state.year * 12 + state.month;
                     const progress = Math.min(100, Math.max(0, ((currentTotal - startTotal) / totalMonths) * 100));
+                    const yard = state.shipyards.find(y => y.id === b.builtAt);
+                    const slipway = yard?.slipways.find(s => s.id === b.builtOnSlipway);
+
                     return (
                       <div key={idx} className="bg-slate-700/50 rounded p-1.5">
                         <div className="flex justify-between items-center mb-0.5">
                           <span className="text-xs text-white">{b.ship.icon} {b.ship.name}</span>
-                          <span className="text-xs text-slate-400">{Math.round(progress)}%</span>
+                          <span className="text-[10px] text-amber-500">{yard?.name}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-[10px] text-slate-500 mb-0.5">
+                          <span>Стапель {slipway?.length}м</span>
+                          <span className="text-amber-400 font-bold">{Math.round(progress)}%</span>
                         </div>
                         <div className="h-1.5 bg-slate-600 rounded-full overflow-hidden">
-                          <div className="h-full bg-gradient-to-r from-amber-600 to-green-500 transition-all duration-500"
-                            style={{ width: `${progress}%` }} />
+                          <div className="h-full bg-gradient-to-r from-amber-600 to-green-500 transition-all duration-500" style={{ width: `${progress}%` }} />
                         </div>
                       </div>
                     );
@@ -949,14 +828,14 @@ function App() {
               )}
             </div>
 
-            {/* Fleet overview */}
+            {/* Fleet */}
             <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-3">
               <h3 className="text-sm font-bold text-amber-400 mb-2">⚓ Флот ({state.builtShips.length})</h3>
               {state.builtShips.length === 0 ? (
                 <p className="text-slate-500 text-xs italic">Пусто</p>
               ) : (
                 <div className="space-y-0.5">
-                  {(['battleship', 'aircraft_carrier', 'cruiser', 'destroyer', 'submarine', 'auxiliary'] as ShipType[]).map((type) => {
+                  {(['battleship', 'aircraft_carrier', 'cruiser', 'destroyer', 'submarine', 'auxiliary'] as ShipType[]).map(type => {
                     const count = state.builtShips.filter(s => s.type === type).length;
                     if (count === 0) return null;
                     return (
@@ -970,45 +849,28 @@ function App() {
               )}
             </div>
 
-            {/* Treaty status */}
+            {/* Treaty */}
             <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-3">
               <h3 className="text-sm font-bold text-amber-400 mb-2">📜 Договоры</h3>
-              <div className={`text-xs p-1.5 rounded ${
-                state.treatyStatus === 'london' ? 'bg-blue-900/30 text-blue-300' :
-                  state.treatyStatus === 'withdrawn' ? 'bg-red-900/30 text-red-300' : 'bg-green-900/30 text-green-300'
-              }`}>
+              <div className={`text-xs p-1.5 rounded ${state.treatyStatus === 'london' ? 'bg-blue-900/30 text-blue-300' : state.treatyStatus === 'withdrawn' ? 'bg-red-900/30 text-red-300' : 'bg-green-900/30 text-green-300'}`}>
                 {state.treatyStatus === 'london' && '📋 Лондонское соглашение'}
                 {state.treatyStatus === 'withdrawn' && '🚫 Договоры разорваны'}
                 {state.treatyStatus === 'unrestricted' && '⚡ Без ограничений'}
               </div>
             </div>
-
-            {/* Current program info */}
-            <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-3">
-              <h3 className="text-sm font-bold text-amber-400 mb-2">📋 Текущая программа</h3>
-              <div className="text-xs text-slate-300">
-                {state.currentProgram === 'マル①' && 'Мару-1: Крейсеры «Могами», эсминцы «Хатсухару», ПЛ'}
-                {state.currentProgram === 'マル②' && 'Мару-2: «Тоне», «Сорю», «Асасио»'}
-                {state.currentProgram === 'マル③' && 'Мару-3: «Ямато», «Сёкаку», «Кагэро»'}
-                {state.currentProgram === 'マル④' && 'Мару-4: «Тайхо», «Агано», «Югумо», «Акидзуки»'}
-                {state.currentProgram === 'マル凛' && 'Мару-Рин: Средние ПЛ, охотники'}
-                {state.currentProgram === 'マル級' && 'Мару-Кю: «Унрю», «Ибуки», «Эторофу»'}
-                {state.currentProgram === '—' && 'Ожидание...'}
-              </div>
-            </div>
           </div>
         </div>
 
-        {/* Log panel */}
+        {/* Log */}
         {showLog && (
-          <div className="mt-4 bg-slate-800/60 border border-slate-700 rounded-xl p-4">
-            <div className="flex justify-between items-center mb-3">
+          <div className="mt-3 bg-slate-800/60 border border-slate-700 rounded-xl p-3">
+            <div className="flex justify-between items-center mb-2">
               <h3 className="text-sm font-bold text-amber-400">📜 Журнал</h3>
-              <button onClick={() => setShowLog(false)} className="text-slate-400 hover:text-white cursor-pointer text-sm">✕</button>
+              <button onClick={() => setShowLog(false)} className="text-slate-400 hover:text-white text-xs cursor-pointer">✕</button>
             </div>
-            <div className="max-h-48 overflow-y-auto space-y-0.5">
+            <div className="max-h-40 overflow-y-auto space-y-0.5">
               {state.log.slice().reverse().map((entry, idx) => (
-                <div key={idx} className="text-xs text-slate-400 border-b border-slate-700/30 pb-0.5">{entry}</div>
+                <div key={idx} className="text-[11px] text-slate-400 border-b border-slate-700/30 pb-0.5">{entry}</div>
               ))}
             </div>
           </div>
