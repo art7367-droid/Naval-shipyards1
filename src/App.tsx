@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import ShipyardView from './ShipyardView';
 
 // ============ TYPES ============
 type ShipType = 'battleship' | 'aircraft_carrier' | 'cruiser' | 'destroyer' | 'submarine' | 'auxiliary';
@@ -822,6 +823,16 @@ function App() {
             <div className="h-full bg-gradient-to-r from-amber-600 to-red-600 transition-all duration-500"
               style={{ width: `${Math.min(100, progressPercent)}%` }} />
           </div>
+        </div>
+
+        {/* Shipyard visualization with construction animation */}
+        <div className="mb-4">
+          <ShipyardView
+            buildingShips={state.buildingShips}
+            currentYear={state.year}
+            currentMonth={state.month}
+            shipyards={state.shipyards}
+          />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
