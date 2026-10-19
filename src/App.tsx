@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { historicalLaydowns } from './historicalData';
 import YokosukaShipyardMap from './YokosukaShipyardMap';
 import KureShipyardMap from './KureShipyardMap';
+import YokosukaCrossSection from './YokosukaCrossSection';
 
 // ============ ТИПЫ ============
 type ShipType = 'battleship' | 'aircraft_carrier' | 'cruiser' | 'destroyer' | 'submarine' | 'auxiliary';
@@ -410,6 +411,7 @@ function App() {
   const [showLog, setShowLog] = useState(false);
   const [showYardInfo, setShowYardInfo] = useState(false);
   const [showYardMap, setShowYardMap] = useState<'yokosuka' | 'kure' | null>(null);
+  const [showCrossSection, setShowCrossSection] = useState(false);
 
   // Game tick
   useEffect(() => {
@@ -792,6 +794,7 @@ function App() {
             <button onClick={() => setShowYardInfo(!showYardInfo)} className="bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded text-xs cursor-pointer">🏭 Верфи</button>
             <button onClick={() => setShowYardMap('yokosuka')} className="bg-blue-700 hover:bg-blue-600 px-2 py-0.5 rounded text-xs cursor-pointer">🗺️ Йокосука</button>
             <button onClick={() => setShowYardMap('kure')} className="bg-red-700 hover:bg-red-600 px-2 py-0.5 rounded text-xs cursor-pointer">🗺️ Курэ</button>
+            <button onClick={() => setShowCrossSection(true)} className="bg-purple-700 hover:bg-purple-600 px-2 py-0.5 rounded text-xs cursor-pointer">📐 Сечение</button>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-amber-400 font-bold text-xs">⭐ {currentScore}</span>
@@ -1010,6 +1013,23 @@ function App() {
               </div>
               <div className="p-4">
                 {showYardMap === 'yokosuka' ? <YokosukaShipyardMap /> : <KureShipyardMap />}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Cross Section Modal */}
+        {showCrossSection && (
+          <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 overflow-y-auto">
+            <div className="bg-slate-900 border-2 border-purple-600 rounded-xl max-w-5xl w-full my-8">
+              <div className="flex justify-between items-center p-4 border-b border-slate-700">
+                <h2 className="text-xl font-bold text-purple-400">
+                  📐 Поперечное сечение верфи Йокосука
+                </h2>
+                <button onClick={() => setShowCrossSection(false)} className="text-slate-400 hover:text-white text-xl cursor-pointer">✕</button>
+              </div>
+              <div className="p-4">
+                <YokosukaCrossSection />
               </div>
             </div>
           </div>
