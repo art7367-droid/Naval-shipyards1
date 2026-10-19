@@ -3,6 +3,7 @@ import { historicalLaydowns } from './historicalData';
 import YokosukaShipyardMap from './YokosukaShipyardMap';
 import KureShipyardMap from './KureShipyardMap';
 import YokosukaCrossSection from './YokosukaCrossSection';
+import ProgramTable from './ProgramTable';
 
 // ============ ТИПЫ ============
 type ShipType = 'battleship' | 'aircraft_carrier' | 'cruiser' | 'destroyer' | 'submarine' | 'auxiliary';
@@ -412,6 +413,7 @@ function App() {
   const [showYardInfo, setShowYardInfo] = useState(false);
   const [showYardMap, setShowYardMap] = useState<'yokosuka' | 'kure' | null>(null);
   const [showCrossSection, setShowCrossSection] = useState(false);
+  const [showProgramTable, setShowProgramTable] = useState(false);
 
   // Game tick
   useEffect(() => {
@@ -792,6 +794,7 @@ function App() {
               {state.isPaused ? '▶' : '⏸'}
             </button>
             <button onClick={() => setShowYardInfo(!showYardInfo)} className="bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded text-xs cursor-pointer">🏭 Верфи</button>
+            <button onClick={() => setShowProgramTable(!showProgramTable)} className="bg-green-700 hover:bg-green-600 px-2 py-0.5 rounded text-xs cursor-pointer">📋 Программы</button>
             <button onClick={() => setShowYardMap('yokosuka')} className="bg-blue-700 hover:bg-blue-600 px-2 py-0.5 rounded text-xs cursor-pointer">🗺️ Йокосука</button>
             <button onClick={() => setShowYardMap('kure')} className="bg-red-700 hover:bg-red-600 px-2 py-0.5 rounded text-xs cursor-pointer">🗺️ Курэ</button>
             <button onClick={() => setShowCrossSection(true)} className="bg-purple-700 hover:bg-purple-600 px-2 py-0.5 rounded text-xs cursor-pointer">📐 Сечение</button>
