@@ -1,0 +1,102 @@
+@import "tailwindcss";
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1e293b;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+/* Animations */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 5px rgba(217, 119, 6, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(217, 119, 6, 0.6); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+@keyframes crane-swing {
+  0%, 100% { transform: rotate(-2deg); }
+  50% { transform: rotate(2deg); }
+}
+
+@keyframes spark-flicker {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.5); }
+}
+
+@keyframes smoke-rise {
+  0% { transform: translateY(0) scale(1); opacity: 0.6; }
+  100% { transform: translateY(-20px) scale(1.5); opacity: 0; }
+}
+
+@keyframes rivet-pop {
+  0% { transform: scale(0); opacity: 0; }
+  50% { transform: scale(1.3); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 3s ease-in-out infinite;
+}
+
+.animate-shimmer {
+  animation: shimmer 2s infinite;
+}
+
+.crane-arm {
+  transform-origin: top left;
+  animation: crane-swing 4s ease-in-out infinite;
+}
+
+.spark {
+  animation: spark-flicker 0.4s ease-in-out infinite;
+}
+
+.smoke-particle {
+  animation: smoke-rise 3s ease-out infinite;
+}
+
+.rivet {
+  animation: rivet-pop 0.5s ease-out forwards;
+}
+
+/* Game-specific styles */
+body {
+  background-color: #0f172a;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+/* Ship part fade-in */
+.ship-part {
+  transition: opacity 0.8s ease-in-out;
+}
+
+/* Progress bar glow when nearly complete */
+.progress-near-complete {
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.5);
+}
