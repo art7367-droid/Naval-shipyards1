@@ -1037,6 +1037,10 @@ function App() {
             </div>
           </div>
         )}
+
+        {showProgramTable && (
+          <ProgramTable onClose={() => setShowProgramTable(false)} />
+        )}
       </div>
     </div>
   );
