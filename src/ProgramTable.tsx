@@ -90,7 +90,10 @@ export default function ProgramTable({ onClose }: ProgramTableProps) {
       <div className="bg-slate-900 border-2 border-green-600 rounded-xl max-w-7xl w-full my-8">
         <div className="flex justify-between items-center p-4 border-b border-slate-700">
           <h2 className="text-xl font-bold text-green-400">📋 Кораблестроительные программы ИЯФ (1931-1941)</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-white text-xl cursor-pointer">✕</button>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="bg-slate-700 hover:bg-slate-600 px-4 py-1.5 rounded text-sm cursor-pointer text-white">← Вернуться</button>
+            <button onClick={onClose} className="text-slate-400 hover:text-white text-xl cursor-pointer">✕</button>
+          </div>
         </div>
         
         <div className="p-4">
